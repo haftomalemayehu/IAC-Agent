@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Terraform Agent Request",
+  "type": "object",
+  "required": ["requestId", "objective", "environment", "cloud"],
+  "properties": {
+    "requestId": { "type": "string" },
+    "objective": { "type": "string" },
+    "environment": { "type": "string" },
+    "cloud": { "type": "string" },
+    "scope": { "type": "array", "items": { "type": "string" } },
+    "constraints": { "type": "object" },
+    "validationLevel": { "type": "string" },
+    "allowApply": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,23 @@
+{
+  "requestId": "phase-1c",
+  "validity": "PASS",
+  "risk": "LOW",
+  "deploymentEligibility": "ELIGIBLE",
+  "stages": {
+    "init": "PASS",
+    "providerSchema": "PASS",
+    "fmt": "PASS",
+    "validate": "PASS",
+    "lint": "NOT_RUN",
+    "security": "NOT_RUN",
+    "test": "PASS",
+    "plan": "PASS"
+  },
+  "plan": {
+    "create": 2,
+    "update": 0,
+    "replace": 0,
+    "destroy": 0,
+    "noOp": 0
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "fixture": "destructive-plan",
+  "planExitCode": 0,
+  "showExitCode": 0,
+  "classification": "ELIGIBLE",
+  "summary": {
+    "create": 1,
+    "update": 0,
+    "replace": 0,
+    "destroy": 0
+  },
+  "stderr": ""
+}

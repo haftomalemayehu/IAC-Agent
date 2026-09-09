@@ -1,0 +1,277 @@
+{
+    "check_type": "terraform",
+    "results": {
+        "failed_checks": [
+            {
+                "check_id": "CKV_AWS_130",
+                "bc_check_id": "BC_AWS_NETWORKING_53",
+                "check_name": "Ensure VPC subnets do not assign public IP by default",
+                "check_result": {
+                    "result": "FAILED",
+                    "evaluated_keys": [
+                        "map_public_ip_on_launch"
+                    ]
+                },
+                "code_block": [
+                    [
+                        29,
+                        "resource \"aws_subnet\" \"public\" {\n"
+                    ],
+                    [
+                        30,
+                        "  vpc_id                  = aws_vpc.main.id\n"
+                    ],
+                    [
+                        31,
+                        "  cidr_block              = \"10.20.1.0/24\"\n"
+                    ],
+                    [
+                        32,
+                        "  map_public_ip_on_launch = true\n"
+                    ],
+                    [
+                        33,
+                        "  availability_zone       = \"us-east-1a\"\n"
+                    ],
+                    [
+                        34,
+                        "\n"
+                    ],
+                    [
+                        35,
+                        "  tags = {\n"
+                    ],
+                    [
+                        36,
+                        "    Name = \"valid-vpc-public\"\n"
+                    ],
+                    [
+                        37,
+                        "  }\n"
+                    ],
+                    [
+                        38,
+                        "}\n"
+                    ]
+                ],
+                "file_path": "/main.tf",
+                "file_abs_path": "/Users/haftommit/Desktop/Dev/AI/IAC-Agent/tests/fixtures/valid-vpc/main.tf",
+                "repo_file_path": "/tests/fixtures/valid-vpc/main.tf",
+                "file_line_range": [
+                    29,
+                    38
+                ],
+                "resource": "aws_subnet.public",
+                "evaluations": null,
+                "check_class": "checkov.terraform.checks.resource.aws.SubnetPublicIP",
+                "fixed_definition": null,
+                "entity_tags": {
+                    "Name": "valid-vpc-public"
+                },
+                "caller_file_path": null,
+                "caller_file_line_range": null,
+                "resource_address": null,
+                "severity": null,
+                "bc_category": null,
+                "benchmarks": null,
+                "description": null,
+                "short_description": null,
+                "vulnerability_details": null,
+                "connected_node": null,
+                "guideline": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-networking-policies/ensure-vpc-subnets-do-not-assign-public-ip-by-default",
+                "details": [],
+                "check_len": null,
+                "definition_context_file_path": "{\"file_path\": \"/Users/haftommit/Desktop/Dev/AI/IAC-Agent/tests/fixtures/valid-vpc/main.tf\", \"tf_source_modules\": null}"
+            },
+            {
+                "check_id": "CKV2_AWS_12",
+                "bc_check_id": "BC_AWS_NETWORKING_4",
+                "check_name": "Ensure the default security group of every VPC restricts all traffic",
+                "check_result": {
+                    "result": "FAILED",
+                    "entity": {
+                        "aws_vpc": {
+                            "main": {
+                                "__end_line__": 27,
+                                "__start_line__": 21,
+                                "cidr_block": [
+                                    "10.20.0.0/16"
+                                ],
+                                "tags": [
+                                    {
+                                        "Name": "valid-vpc"
+                                    }
+                                ],
+                                "__address__": "aws_vpc.main"
+                            }
+                        }
+                    },
+                    "evaluated_keys": [
+                        "resource_type",
+                        "ingress/to_port",
+                        "egress/cidr_blocks",
+                        "ingress/from_port",
+                        "ingress/self",
+                        "egress/protocol",
+                        "egress/to_port",
+                        "ingress/protocol",
+                        "egress/from_port"
+                    ]
+                },
+                "code_block": [
+                    [
+                        21,
+                        "resource \"aws_vpc\" \"main\" {\n"
+                    ],
+                    [
+                        22,
+                        "  cidr_block = \"10.20.0.0/16\"\n"
+                    ],
+                    [
+                        23,
+                        "\n"
+                    ],
+                    [
+                        24,
+                        "  tags = {\n"
+                    ],
+                    [
+                        25,
+                        "    Name = \"valid-vpc\"\n"
+                    ],
+                    [
+                        26,
+                        "  }\n"
+                    ],
+                    [
+                        27,
+                        "}\n"
+                    ]
+                ],
+                "file_path": "/main.tf",
+                "file_abs_path": "/Users/haftommit/Desktop/Dev/AI/IAC-Agent/tests/fixtures/valid-vpc/main.tf",
+                "repo_file_path": "/tests/fixtures/valid-vpc/main.tf",
+                "file_line_range": [
+                    21,
+                    27
+                ],
+                "resource": "aws_vpc.main",
+                "evaluations": null,
+                "check_class": "checkov.common.graph.checks_infra.base_check",
+                "fixed_definition": null,
+                "entity_tags": {
+                    "Name": "valid-vpc"
+                },
+                "caller_file_path": null,
+                "caller_file_line_range": null,
+                "resource_address": null,
+                "severity": null,
+                "bc_category": null,
+                "benchmarks": null,
+                "description": null,
+                "short_description": null,
+                "vulnerability_details": null,
+                "connected_node": null,
+                "guideline": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-networking-policies/networking-4",
+                "details": [],
+                "check_len": null,
+                "definition_context_file_path": "/Users/haftommit/Desktop/Dev/AI/IAC-Agent/tests/fixtures/valid-vpc/main.tf"
+            },
+            {
+                "check_id": "CKV2_AWS_11",
+                "bc_check_id": "BC_AWS_LOGGING_9",
+                "check_name": "Ensure VPC flow logging is enabled in all VPCs",
+                "check_result": {
+                    "result": "FAILED",
+                    "entity": {
+                        "aws_vpc": {
+                            "main": {
+                                "__end_line__": 27,
+                                "__start_line__": 21,
+                                "cidr_block": [
+                                    "10.20.0.0/16"
+                                ],
+                                "tags": [
+                                    {
+                                        "Name": "valid-vpc"
+                                    }
+                                ],
+                                "__address__": "aws_vpc.main"
+                            }
+                        }
+                    },
+                    "evaluated_keys": [
+                        "resource_type",
+                        "networking"
+                    ]
+                },
+                "code_block": [
+                    [
+                        21,
+                        "resource \"aws_vpc\" \"main\" {\n"
+                    ],
+                    [
+                        22,
+                        "  cidr_block = \"10.20.0.0/16\"\n"
+                    ],
+                    [
+                        23,
+                        "\n"
+                    ],
+                    [
+                        24,
+                        "  tags = {\n"
+                    ],
+                    [
+                        25,
+                        "    Name = \"valid-vpc\"\n"
+                    ],
+                    [
+                        26,
+                        "  }\n"
+                    ],
+                    [
+                        27,
+                        "}\n"
+                    ]
+                ],
+                "file_path": "/main.tf",
+                "file_abs_path": "/Users/haftommit/Desktop/Dev/AI/IAC-Agent/tests/fixtures/valid-vpc/main.tf",
+                "repo_file_path": "/tests/fixtures/valid-vpc/main.tf",
+                "file_line_range": [
+                    21,
+                    27
+                ],
+                "resource": "aws_vpc.main",
+                "evaluations": null,
+                "check_class": "checkov.common.graph.checks_infra.base_check",
+                "fixed_definition": null,
+                "entity_tags": {
+                    "Name": "valid-vpc"
+                },
+                "caller_file_path": null,
+                "caller_file_line_range": null,
+                "resource_address": null,
+                "severity": null,
+                "bc_category": null,
+                "benchmarks": null,
+                "description": null,
+                "short_description": null,
+                "vulnerability_details": null,
+                "connected_node": null,
+                "guideline": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-logging-policies/logging-9-enable-vpc-flow-logging",
+                "details": [],
+                "check_len": null,
+                "definition_context_file_path": "/Users/haftommit/Desktop/Dev/AI/IAC-Agent/tests/fixtures/valid-vpc/main.tf"
+            }
+        ]
+    },
+    "summary": {
+        "passed": 1,
+        "failed": 3,
+        "skipped": 0,
+        "parsing_errors": 0,
+        "resource_count": 2,
+        "checkov_version": "2.3.365"
+    }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Approval Schema",
+  "type": "object",
+  "required": ["requestId", "planHash", "environment", "approvedBy", "approvedAt"],
+  "properties": {
+    "requestId": { "type": "string" },
+    "planHash": { "type": "string" },
+    "environment": { "type": "string" },
+    "approvedBy": { "type": "string" },
+    "approvedAt": { "type": "string", "format": "date-time" },
+    "actions": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "integer" },
+        "update": { "type": "integer" },
+        "replace": { "type": "integer" },
+        "destroy": { "type": "integer" }
+      }
+    }
+  },
+  "additionalProperties": true
+}
