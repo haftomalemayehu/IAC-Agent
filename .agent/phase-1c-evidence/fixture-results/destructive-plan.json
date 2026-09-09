@@ -1,13 +1,20 @@
 {
   "fixture": "destructive-plan",
-  "planExitCode": 0,
-  "showExitCode": 0,
-  "classification": "ELIGIBLE",
-  "summary": {
-    "create": 1,
+  "status": "APPROVAL_REQUIRED",
+  "plan": {
+    "create": 0,
     "update": 0,
     "replace": 0,
-    "destroy": 0
+    "destroy": 1
   },
-  "stderr": ""
+  "summary": {
+    "create": 0,
+    "update": 0,
+    "replace": 0,
+    "destroy": 1,
+    "noOp": 0
+  },
+  "reason": [
+    "RESOURCE_DESTRUCTION"
+  ]
 }

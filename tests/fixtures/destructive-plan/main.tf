@@ -19,6 +19,7 @@ provider "aws" {
 }
 
 resource "aws_vpc" "destructive" {
+  count      = 0
   cidr_block = "10.50.0.0/16"
 
   tags = {

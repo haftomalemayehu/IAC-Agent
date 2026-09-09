@@ -1,7 +1,7 @@
 {
   "fixture": "invalid-resource",
-  "schemaExitCode": 1,
   "status": "SCHEMA_UNVERIFIED",
-  "stderr": "\u001b[31m\u001b[31m\u2577\u001b[0m\u001b[0m\n\u001b[31m\u2502\u001b[0m \u001b[0m\u001b[1m\u001b[31mError: \u001b[0m\u001b[0m\u001b[1mInconsistent dependency lock file\u001b[0m\n\u001b[31m\u2502\u001b[0m \u001b[0m\n\u001b[31m\u2502\u001b[0m \u001b[0m\u001b[0mThe following dependency selections recorded in the lock file are\n\u001b[31m\u2502\u001b[0m \u001b[0minconsistent with the current configuration:\n\u001b[31m\u2502\u001b[0m \u001b[0m  - provider registry.terraform.io/hashicorp/aws: required by this configuration but no version is selected\n\u001b[31m\u2502\u001b[0m \u001b[0m\n\u001b[31m\u2502\u001b[0m \u001b[0mTo make the initial dependency selections that will initialize the\n\u001b[31m\u2502\u001b[0m \u001b[0mdependency lock file, run:\n\u001b[31m\u2502\u001b[0m \u001b[0m  terraform init\n\u001b[31m\u2575\u001b[0m\u001b[0m\n\u001b[0m\u001b[0m",
-  "stdout": ""
+  "schema": "BLOCKED",
+  "reason": "SCHEMA_UNVERIFIED",
+  "expected": "BLOCKED / SCHEMA_UNVERIFIED"
 }

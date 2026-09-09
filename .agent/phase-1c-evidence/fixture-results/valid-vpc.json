@@ -1,0 +1,16 @@
+{
+  "fixture": "valid-vpc",
+  "status": "PASS",
+  "schema": "PASS",
+  "validate": "PASS",
+  "tflint": "PASS",
+  "checkov": "PASS",
+  "plan": "PASS",
+  "summary": {
+    "create": 9,
+    "update": 0,
+    "replace": 0,
+    "destroy": 0,
+    "noOp": 0
+  }
+}

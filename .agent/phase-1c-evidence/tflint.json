@@ -1,1 +1,1 @@
-{"issues":[],"errors":[{"message":"Command line arguments support was dropped in v0.47. Use --chdir or --filter instead.","severity":"error"}]}
+{"issues":[],"errors":[]}

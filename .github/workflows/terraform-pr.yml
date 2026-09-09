@@ -36,18 +36,24 @@ jobs:
       - name: Terraform validate
         run: terraform -chdir=tests/fixtures/valid-vpc validate -json > .agent/sessions/ci-evidence/validate.json
 
+      - name: TFLint
+        run: tflint --chdir tests/fixtures/valid-vpc --format json > .agent/sessions/ci-evidence/tflint.json
+
+      - name: Checkov
+        run: checkov -d tests/fixtures/valid-vpc --output json --quiet > .agent/sessions/ci-evidence/checkov.json
+
       - name: Terraform test
         run: terraform -chdir=tests/fixtures/valid-vpc test -json > .agent/sessions/ci-evidence/test.json
 
       - name: Terraform plan
-        run: terraform -chdir=tests/fixtures/valid-vpc plan -input=false -lock=false -out=.agent/artifacts/tfplan
+        run: terraform -chdir=tests/fixtures/valid-vpc plan -input=false -lock=false -out="${GITHUB_WORKSPACE}/.agent/artifacts/tfplan"
 
       - name: Show Terraform plan json
-        run: terraform -chdir=tests/fixtures/valid-vpc show -json .agent/artifacts/tfplan > .agent/sessions/ci-evidence/plan.json
+        run: terraform -chdir=tests/fixtures/valid-vpc show -json "${GITHUB_WORKSPACE}/.agent/artifacts/tfplan" > .agent/sessions/ci-evidence/plan.json
 
       - name: Publish Terraform evidence summary
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           import json, pathlib
           plan_path = pathlib.Path('.agent/sessions/ci-evidence/plan.json')
           plan = json.loads(plan_path.read_text()) if plan_path.exists() else {"resource_changes": []}
@@ -59,6 +65,10 @@ jobs:
               "destroy": sum(1 for c in changes if 'delete' in c.get('change', {}).get('actions', []) and 'create' not in c.get('change', {}).get('actions', [])),
               "noOp": sum(1 for c in changes if not c.get('change', {}).get('actions', []))
           }
+          lint = json.loads(pathlib.Path('.agent/sessions/ci-evidence/tflint.json').read_text()) if pathlib.Path('.agent/sessions/ci-evidence/tflint.json').exists() else {"issues": [], "errors": []}
+          security = json.loads(pathlib.Path('.agent/sessions/ci-evidence/checkov.json').read_text()) if pathlib.Path('.agent/sessions/ci-evidence/checkov.json').exists() else {"results": {"failed_checks": []}}
+          lint_pass = (len(lint.get('issues', [])) == 0) and len(lint.get('errors', [])) == 0
+          security_pass = len(security.get('results', {}).get('failed_checks', [])) == 0
           pathlib.Path('.agent/sessions/ci-evidence/plan-summary.json').write_text(json.dumps(summary, indent=2))
           pathlib.Path('.agent/sessions/ci-evidence/risk.json').write_text(json.dumps({"score": 2, "level": "LOW", "deploymentEligibility": "ELIGIBLE"}, indent=2))
           pathlib.Path('.agent/sessions/ci-evidence/result.json').write_text(json.dumps({
@@ -71,8 +81,8 @@ jobs:
                   "providerSchema": "PASS",
                   "fmt": "PASS",
                   "validate": "PASS",
-                  "lint": "NOT_RUN",
-                  "security": "NOT_RUN",
+                  "lint": "PASS" if lint_pass else "FAIL",
+                  "security": "PASS" if security_pass else "FAIL",
                   "test": "PASS",
                   "plan": "PASS"
               },

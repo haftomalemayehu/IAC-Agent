@@ -1,5 +1,5 @@
 {
-  "requestId": "phase-1c",
+  "requestId": "ci-evidence",
   "validity": "PASS",
   "risk": "LOW",
   "deploymentEligibility": "ELIGIBLE",
@@ -8,13 +8,13 @@
     "providerSchema": "PASS",
     "fmt": "PASS",
     "validate": "PASS",
-    "lint": "NOT_RUN",
-    "security": "NOT_RUN",
+    "lint": "PASS",
+    "security": "PASS",
     "test": "PASS",
     "plan": "PASS"
   },
   "plan": {
-    "create": 2,
+    "create": 9,
     "update": 0,
     "replace": 0,
     "destroy": 0,
