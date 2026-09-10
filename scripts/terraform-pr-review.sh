@@ -18,12 +18,15 @@ ARTIFACT_DIR=".agent/sessions/ci-evidence"
 PLAN_PATH=".agent/artifacts/tfplan"
 MARKER='<!-- terraform-review -->'
 
-if [[ ! -f "$PLAN_PATH" ]]; then
-  echo "terraform tfplan artifact missing"
-  exit 1
+if [[ -f "$PLAN_PATH" ]]; then
+  PLAN_HASH="$(sha256sum "$PLAN_PATH" | awk '{print $1}')"
+else
+  # A failed `terraform plan` (e.g. validate/lint/security failures upstream)
+  # leaves no plan artifact. The review must still be posted as BLOCKED, so
+  # hash whatever evidence exists instead of aborting the whole pipeline.
+  echo "terraform tfplan artifact missing; hashing available evidence for a BLOCKED review"
+  PLAN_HASH="$(find "$ARTIFACT_DIR" -type f -exec sha256sum {} \; 2>/dev/null | sha256sum | awk '{print $1}')"
 fi
-
-PLAN_HASH="$(sha256sum "$PLAN_PATH" | awk '{print $1}')"
 PLAN_HASH_PREFIX="sha256:${PLAN_HASH}"
 echo "$PLAN_HASH_PREFIX" > .agent/artifacts/tfplan.sha256
 
