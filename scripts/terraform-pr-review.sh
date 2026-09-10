@@ -37,7 +37,14 @@ if [[ -n "${GITHUB_SERVER_URL:-}" && -n "${GITHUB_REPOSITORY:-}" && -n "${GITHUB
   CI_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 fi
 
-PR_NUMBER="$(gh pr view --json number -q .number 2>/dev/null || true)"
+# `gh pr view` cannot auto-detect the PR from a GitHub Actions checkout
+# (the checked-out ref has no local branch tracking a remote PR), so the
+# workflow must pass the PR number explicitly via $PR_NUMBER from the
+# pull_request event context. Only fall back to autodetection for local/
+# manual runs outside CI.
+if [[ -z "${PR_NUMBER:-}" ]]; then
+  PR_NUMBER="$(gh pr view --json number -q .number 2>/dev/null || true)"
+fi
 if [[ -z "$PR_NUMBER" ]]; then
   echo "No PR associated with this checkout"
   exit 0
