@@ -31,40 +31,40 @@ jobs:
         run: terraform fmt -check -recursive
 
       - name: Terraform init backend false
-        run: terraform -chdir=tests/fixtures/valid-vpc init -backend=false -input=false
+        run: terraform -chdir=tests/fixtures/replacement-plan init -backend=false -input=false
 
       - name: Provider schema
-        run: terraform -chdir=tests/fixtures/valid-vpc providers schema -json > .agent/cache/provider-schema.json
+        run: terraform -chdir=tests/fixtures/replacement-plan providers schema -json > .agent/cache/provider-schema.json
 
       - name: Terraform validate
         id: validate
         continue-on-error: true
-        run: terraform -chdir=tests/fixtures/valid-vpc validate -json > .agent/sessions/ci-evidence/validate.json
+        run: terraform -chdir=tests/fixtures/replacement-plan validate -json > .agent/sessions/ci-evidence/validate.json
 
       - name: TFLint
         id: tflint
         continue-on-error: true
-        run: tflint --chdir tests/fixtures/valid-vpc --format json > .agent/sessions/ci-evidence/tflint.json
+        run: tflint --chdir tests/fixtures/replacement-plan --format json > .agent/sessions/ci-evidence/tflint.json
 
       - name: Checkov
         id: checkov
         continue-on-error: true
-        run: checkov -d tests/fixtures/valid-vpc --output json --quiet > .agent/sessions/ci-evidence/checkov.json
+        run: checkov -d tests/fixtures/replacement-plan --output json --quiet > .agent/sessions/ci-evidence/checkov.json
 
       - name: Terraform test
         id: tf_test
         continue-on-error: true
-        run: terraform -chdir=tests/fixtures/valid-vpc test -json > .agent/sessions/ci-evidence/test.json
+        run: terraform -chdir=tests/fixtures/replacement-plan test -json > .agent/sessions/ci-evidence/test.json
 
       - name: Terraform plan
         id: tf_plan
         continue-on-error: true
-        run: terraform -chdir=tests/fixtures/valid-vpc plan -input=false -lock=false -out="${GITHUB_WORKSPACE}/.agent/artifacts/tfplan"
+        run: terraform -chdir=tests/fixtures/replacement-plan plan -input=false -lock=false -out="${GITHUB_WORKSPACE}/.agent/artifacts/tfplan"
 
       - name: Show Terraform plan json
         id: tf_show
         continue-on-error: true
-        run: terraform -chdir=tests/fixtures/valid-vpc show -json "${GITHUB_WORKSPACE}/.agent/artifacts/tfplan" > .agent/sessions/ci-evidence/plan.json
+        run: terraform -chdir=tests/fixtures/replacement-plan show -json "${GITHUB_WORKSPACE}/.agent/artifacts/tfplan" > .agent/sessions/ci-evidence/plan.json
 
       - name: Publish Terraform evidence summary
         if: always()
