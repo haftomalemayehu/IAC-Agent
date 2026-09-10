@@ -1890,34 +1890,41 @@ This creates the essential agent.
 
 # 47. Phase 2
 
-Add:
+Phase 2 moves the system from reviewing infrastructure changes to controlled
+execution of already-approved changes — a different trust boundary than
+Phase 1, not an extension of it.
+
+The detailed Phase 2 roadmap (sub-phases 2A-2I, the plan-hash lineage
+invariant, preliminary execution authority boundaries, and the Enterprise
+v1 completion gates) is maintained separately in:
 
 ```text
-Infracost
-OPA/Sentinel
-GitHub/GitLab PR automation
-Terraform MCP
-Cloud read-only inspection
-Drift detection
+docs/roadmap-phase-2.md
 ```
+
+as its own versioned document, since it evolves independently as
+implementation constraints are discovered. This section is intentionally
+not a duplicate of that content; treat `docs/roadmap-phase-2.md` as
+authoritative for Phase 2 scope, sequencing, and acceptance criteria.
+
+The high-level principles that still govern Phase 2 from this document
+are unchanged: the authority hierarchy (§4), the anti-hallucination rule
+(§5), the agent contract's forbidden autonomous actions (§3), and the
+forbidden autonomous commands (§28) all continue to apply without
+exception once execution authority exists.
 
 ---
 
 # 48. Phase 3
 
-Add:
-
-```text
-HCP Terraform
-Vault
-enterprise identity
-RBAC
-audit database
-central Terraform MCP
-private module registry
-policy library
-multi-cloud support
-```
+Phase 3 (agent intelligence beyond deterministic orchestration — natural
+language request understanding, architecture proposal, autonomous PR
+creation and reviewer-feedback response) remains scoped only at a high
+level until Phase 2's execution trust boundary is settled and
+implemented. See `docs/roadmap-phase-2.md` for how Phase 3 is expected to
+build on Phase 2's deterministic control plane once that work begins;
+this document does not maintain a separate Phase 3 task list to avoid
+two competing descriptions.
 
 ---
 
@@ -2403,3 +2410,9 @@ When implementation is finished, report:
 Do not claim completion until tests and available validation commands have actually executed.
 
 Begin by inspecting the repository before creating files.
+
+================ ================================ ================================ ================
+At this point I’d define completion as: the system can take an infrastructure request,
+produce a verified plan, surface risk/cost/security in PR, obtain approval,
+execute only within policy, verify the result, and leave a complete audit trail.
+================ ================================ ================================ ================
