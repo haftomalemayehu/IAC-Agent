@@ -1,0 +1,23 @@
+{
+  "requestId": "ci-evidence",
+  "validity": "PASS",
+  "risk": "LOW",
+  "deploymentEligibility": "ELIGIBLE",
+  "stages": {
+    "init": "PASS",
+    "providerSchema": "PASS",
+    "fmt": "PASS",
+    "validate": "PASS",
+    "lint": "PASS",
+    "security": "PASS",
+    "test": "PASS",
+    "plan": "PASS"
+  },
+  "plan": {
+    "create": 9,
+    "update": 0,
+    "replace": 0,
+    "destroy": 0,
+    "noOp": 0
+  }
+}

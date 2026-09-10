@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Terraform Agent Result",
+  "type": "object",
+  "required": ["requestId", "status"],
+  "properties": {
+    "requestId": { "type": "string" },
+    "status": { "type": "string" },
+    "filesChanged": { "type": "array" },
+    "validation": { "type": "object" },
+    "security": { "type": "object" },
+    "tests": { "type": "object" },
+    "cost": { "type": "object" },
+    "plan": { "type": "object" },
+    "risk": { "type": "object" },
+    "approvalRequired": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

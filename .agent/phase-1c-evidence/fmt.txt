@@ -1,0 +1,5 @@
+tests/fixtures/destructive-plan/main.tf
+tests/fixtures/invalid-attribute/main.tf
+tests/fixtures/invalid-resource/main.tf
+tests/fixtures/replacement-plan/main.tf
+tests/fixtures/valid-vpc/main.tf

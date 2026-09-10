@@ -1,0 +1,20 @@
+{
+  "fixture": "destructive-plan",
+  "status": "APPROVAL_REQUIRED",
+  "plan": {
+    "create": 0,
+    "update": 0,
+    "replace": 0,
+    "destroy": 1
+  },
+  "summary": {
+    "create": 0,
+    "update": 0,
+    "replace": 0,
+    "destroy": 1,
+    "noOp": 0
+  },
+  "reason": [
+    "RESOURCE_DESTRUCTION"
+  ]
+}

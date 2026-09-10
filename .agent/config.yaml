@@ -1,0 +1,37 @@
+agent:
+  mode: develop
+  maxRepairAttempts: 3
+
+terraform:
+  minimumVersion: "1.6"
+  backendInit: false
+
+validation:
+  fmt: true
+  validate: true
+  tflint: true
+  terraformTest: true
+
+security:
+  tool: checkov
+  blockCritical: true
+  blockHigh: true
+
+cost:
+  enabled: true
+  warningPercent: 10
+  approvalPercent: 20
+
+approval:
+  productionApply: required
+  destroy: required
+  replacement: required
+  stateOperation: required
+  iamPrivilegeExpansion: required
+  networkExposure: required
+
+git:
+  protectedBranches:
+    - main
+    - master
+  allowForcePush: false

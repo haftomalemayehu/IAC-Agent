@@ -1,0 +1,7 @@
+{
+  "fixture": "invalid-attribute",
+  "status": "SCHEMA_UNVERIFIED",
+  "schema": "BLOCKED",
+  "reason": "SCHEMA_UNVERIFIED",
+  "expected": "BLOCKED / SCHEMA_UNVERIFIED"
+}

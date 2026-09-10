@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Plan Risk",
+  "type": "object",
+  "required": ["score", "level"],
+  "properties": {
+    "score": { "type": "integer" },
+    "level": { "type": "string" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "category": { "type": "string" },
+          "score": { "type": "integer" },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}
