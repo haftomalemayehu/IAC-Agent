@@ -33,7 +33,7 @@ def render(evidence_dir: pathlib.Path, plan_hash: str, ci_run_url: Optional[str]
 
     critical = []
     if plan.get("replace", 0) > 0:
-        critical.append("aws resources will be replaced")
+        critical.append("resources will be replaced")
     if plan.get("destroy", 0) > 0:
         critical.append("destroy actions are present")
 
