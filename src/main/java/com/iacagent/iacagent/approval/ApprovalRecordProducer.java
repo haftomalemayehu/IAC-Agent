@@ -62,6 +62,12 @@ public final class ApprovalRecordProducer implements ApprovalAuthority {
 
     @Override
     public String issue(ApprovalIssuanceRequest request, TrustedApprovalContext context) {
+        ApprovalRecord record = buildRecord(request, context);
+        repository.create(record);
+        return record.approvalId();
+    }
+
+    private ApprovalRecord buildRecord(ApprovalIssuanceRequest request, TrustedApprovalContext context) {
         if (request == null) {
             throw new IllegalArgumentException("request is required");
         }
@@ -72,7 +78,7 @@ public final class ApprovalRecordProducer implements ApprovalAuthority {
         Instant approvedAt = clock.instant();
         Instant expiresAt = approvedAt.plus(ttlPolicy.ttlFor(request.environment()));
         String approvalId = approvalIdGenerator.get();
-        ApprovalRecord record = new ApprovalRecord(
+        return new ApprovalRecord(
                 approvalId,
                 request.repository(),
                 request.commitSha(),
@@ -86,8 +92,6 @@ public final class ApprovalRecordProducer implements ApprovalAuthority {
                 null, null, null,
                 null, null, null
         );
-        repository.create(record);
-        return approvalId;
     }
 
     @Override
@@ -116,6 +120,11 @@ public final class ApprovalRecordProducer implements ApprovalAuthority {
             throw new IllegalArgumentException("priorApprovalId is required");
         }
 
+        // Read-only sanity check, not part of the atomic write below: guards against obviously
+        // wrong usage (naming a prior approval for an unrelated repository/environment). This is
+        // deliberately a plain read against whatever state is visible right now - it is not
+        // itself required to be transactionally consistent with the write that follows, unlike
+        // the insert+supersede pair, which repository.createAndSupersede protects atomically.
         Optional<ApprovalRecord> prior = repository.find(priorApprovalId);
         if (prior.isEmpty()) {
             throw new IllegalArgumentException("no approval found for priorApprovalId: " + priorApprovalId);
@@ -126,8 +135,7 @@ public final class ApprovalRecordProducer implements ApprovalAuthority {
                     "priorApprovalId does not share repository/environment with newRequest - refusing to supersede across unrelated contexts");
         }
 
-        String newApprovalId = issue(newRequest, context);
-        TransitionOutcome priorOutcome = repository.supersede(priorApprovalId, clock.instant(), newApprovalId, newRequest.planSha256());
-        return new SupersedingIssuanceResult(newApprovalId, priorOutcome);
+        ApprovalRecord newRecord = buildRecord(newRequest, context);
+        return repository.createAndSupersede(newRecord, priorApprovalId, clock.instant());
     }
 }

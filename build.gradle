@@ -22,6 +22,10 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter'
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
+    // Phase 2C-2: durable approval persistence (plain JDBC + Flyway migrations, no ORM/DI wiring -
+    // see com.iacagent.iacagent.approval.jdbc). Not used by any execution path.
+    implementation 'com.h2database:h2'
+    implementation 'org.flywaydb:flyway-core'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

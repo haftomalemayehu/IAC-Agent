@@ -15,6 +15,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -322,6 +323,149 @@ class Phase2c1Tests {
         }
     }
 
+    // Proves InMemoryApprovalRepository#createAndSupersede has the same all-or-nothing atomicity
+    // contract as JdbcApprovalRepository's single-transaction implementation: two concurrent
+    // create+supersede attempts against the same prior approval must never both transition it,
+    // the winner's new approval must exist, and the LOSER's new approval must NOT exist - a losing
+    // attempt is a full no-op, not a partial one that still leaves behind a standalone approval.
+    @Test
+    void concurrentCreateAndSupersedeCannotBothTransitionThePriorApproval() throws InterruptedException {
+        for (int iteration = 0; iteration < 20; iteration++) {
+            InMemoryApprovalRepository repo = new InMemoryApprovalRepository();
+            String priorId = "approval-prior-" + iteration;
+            repo.create(new ApprovalRecord(
+                    priorId, "owner/repository", "c".repeat(40), "nonprod", "sha256:prior",
+                    "platform-admin", NOW, NOW.plus(Duration.ofHours(1)), ApprovalStatus.ACTIVE, ApprovalProvenance.NONE,
+                    null, null, null, null, null, null));
+
+            ApprovalRecord candidateX = new ApprovalRecord(
+                    "approval-x-" + iteration, "owner/repository", "c".repeat(40), "nonprod", "sha256:x",
+                    "platform-admin", NOW, NOW.plus(Duration.ofHours(1)), ApprovalStatus.ACTIVE, ApprovalProvenance.NONE,
+                    null, null, null, null, null, null);
+            ApprovalRecord candidateY = new ApprovalRecord(
+                    "approval-y-" + iteration, "owner/repository", "c".repeat(40), "nonprod", "sha256:y",
+                    "platform-admin", NOW, NOW.plus(Duration.ofHours(1)), ApprovalStatus.ACTIVE, ApprovalProvenance.NONE,
+                    null, null, null, null, null, null);
+
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch go = new CountDownLatch(1);
+            AtomicInteger successCount = new AtomicInteger(0);
+            AtomicReference<SupersedingIssuanceResult> resultX = new AtomicReference<>();
+            AtomicReference<SupersedingIssuanceResult> resultY = new AtomicReference<>();
+
+            Runnable attemptX = () -> {
+                ready.countDown();
+                awaitUninterruptibly(go);
+                SupersedingIssuanceResult result = repo.createAndSupersede(candidateX, priorId, NOW.plus(Duration.ofMinutes(1)));
+                resultX.set(result);
+                if (result.priorApprovalTransition() == TransitionOutcome.SUCCESS) {
+                    successCount.incrementAndGet();
+                }
+            };
+            Runnable attemptY = () -> {
+                ready.countDown();
+                awaitUninterruptibly(go);
+                SupersedingIssuanceResult result = repo.createAndSupersede(candidateY, priorId, NOW.plus(Duration.ofMinutes(1)));
+                resultY.set(result);
+                if (result.priorApprovalTransition() == TransitionOutcome.SUCCESS) {
+                    successCount.incrementAndGet();
+                }
+            };
+
+            pool.submit(attemptX);
+            pool.submit(attemptY);
+            ready.await();
+            go.countDown();
+            pool.shutdown();
+            assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS));
+
+            assertEquals(1, successCount.get(), "exactly one createAndSupersede attempt may transition the shared prior approval (iteration " + iteration + ")");
+
+            boolean xWon = resultX.get().priorApprovalTransition() == TransitionOutcome.SUCCESS;
+            SupersedingIssuanceResult winnerResult = xWon ? resultX.get() : resultY.get();
+            SupersedingIssuanceResult loserResult = xWon ? resultY.get() : resultX.get();
+            ApprovalRecord winnerCandidate = xWon ? candidateX : candidateY;
+            ApprovalRecord loserCandidate = xWon ? candidateY : candidateX;
+
+            assertEquals(winnerCandidate.approvalId(), winnerResult.newApprovalId());
+            assertNull(loserResult.newApprovalId(), "the losing attempt's new approval id must be null in its own result");
+            assertTrue(repo.find(winnerCandidate.approvalId()).isPresent(), "the winner's new approval must exist");
+            assertTrue(repo.find(loserCandidate.approvalId()).isEmpty(), "the loser's new approval must NOT exist - a losing attempt is a full no-op");
+
+            ApprovalRecord prior = repo.find(priorId).orElseThrow();
+            assertEquals(ApprovalStatus.SUPERSEDED, prior.status());
+            assertEquals(winnerCandidate.approvalId(), prior.supersedingApprovalId());
+            assertEquals(winnerCandidate.planSha256(), prior.supersedingPlanSha256());
+        }
+    }
+
+    // Proves a concurrent revoke() cannot race with createAndSupersede() on the same approval to
+    // produce two successful transitions, and that the two legal outcomes are the ONLY outcomes:
+    // either revoke wins (target REVOKED, new approval absent) or supersede wins (target SUPERSEDED
+    // by new, new approval ACTIVE) - never "target REVOKED, new approval ACTIVE" (an orphan).
+    @Test
+    void concurrentRevokeVsCreateAndSupersedeExactlyOneTransitionSucceeds() throws InterruptedException {
+        for (int iteration = 0; iteration < 20; iteration++) {
+            InMemoryApprovalRepository repo = new InMemoryApprovalRepository();
+            String targetId = "approval-target-" + iteration;
+            repo.create(new ApprovalRecord(
+                    targetId, "owner/repository", "c".repeat(40), "nonprod", "sha256:target",
+                    "platform-admin", NOW, NOW.plus(Duration.ofHours(1)), ApprovalStatus.ACTIVE, ApprovalProvenance.NONE,
+                    null, null, null, null, null, null));
+            ApprovalRecord newCandidate = new ApprovalRecord(
+                    "approval-new-" + iteration, "owner/repository", "c".repeat(40), "nonprod", "sha256:new",
+                    "platform-admin", NOW, NOW.plus(Duration.ofHours(1)), ApprovalStatus.ACTIVE, ApprovalProvenance.NONE,
+                    null, null, null, null, null, null);
+
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch go = new CountDownLatch(1);
+            AtomicInteger successCount = new AtomicInteger(0);
+            AtomicReference<SupersedingIssuanceResult> supersedeResult = new AtomicReference<>();
+
+            Runnable revokeAttempt = () -> {
+                ready.countDown();
+                awaitUninterruptibly(go);
+                if (repo.revoke(targetId, NOW.plus(Duration.ofMinutes(1)), "security-lead", "race-test") == TransitionOutcome.SUCCESS) {
+                    successCount.incrementAndGet();
+                }
+            };
+            Runnable supersedeAttempt = () -> {
+                ready.countDown();
+                awaitUninterruptibly(go);
+                SupersedingIssuanceResult result = repo.createAndSupersede(newCandidate, targetId, NOW.plus(Duration.ofMinutes(1)));
+                supersedeResult.set(result);
+                if (result.priorApprovalTransition() == TransitionOutcome.SUCCESS) {
+                    successCount.incrementAndGet();
+                }
+            };
+
+            pool.submit(revokeAttempt);
+            pool.submit(supersedeAttempt);
+            ready.await();
+            go.countDown();
+            pool.shutdown();
+            assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS));
+
+            assertEquals(1, successCount.get(), "exactly one of revoke/createAndSupersede may transition the target (iteration " + iteration + ")");
+
+            ApprovalRecord target = repo.find(targetId).orElseThrow();
+            boolean supersedeWon = supersedeResult.get().priorApprovalTransition() == TransitionOutcome.SUCCESS;
+            if (supersedeWon) {
+                assertEquals(ApprovalStatus.SUPERSEDED, target.status());
+                assertEquals(newCandidate.approvalId(), target.supersedingApprovalId());
+                assertEquals(newCandidate.approvalId(), supersedeResult.get().newApprovalId());
+                assertTrue(repo.find(newCandidate.approvalId()).isPresent(), "supersede won - the new approval must be ACTIVE");
+                assertEquals(ApprovalStatus.ACTIVE, repo.find(newCandidate.approvalId()).orElseThrow().status());
+            } else {
+                assertEquals(ApprovalStatus.REVOKED, target.status());
+                assertNull(supersedeResult.get().newApprovalId(), "revoke won - createAndSupersede must report no new approval id");
+                assertTrue(repo.find(newCandidate.approvalId()).isEmpty(), "revoke won - the new approval must NOT exist (no orphan)");
+            }
+        }
+    }
+
     private static void awaitUninterruptibly(CountDownLatch latch) {
         try {
             latch.await();
@@ -474,7 +618,14 @@ class Phase2c1Tests {
                 null, null, null, null, null, null);
         repo.create(record);
 
-        assertThrows(IllegalStateException.class, () -> repo.create(record));
+        ApprovalRecord conflicting = new ApprovalRecord(
+                "approval-dup", "owner/repository", "c".repeat(40), "nonprod", "sha256:different",
+                "someone-else", NOW.plus(Duration.ofMinutes(1)), NOW.plus(Duration.ofHours(2)), ApprovalStatus.ACTIVE, ApprovalProvenance.NONE,
+                null, null, null, null, null, null);
+        assertThrows(IllegalStateException.class, () -> repo.create(conflicting));
+
+        // the original record must remain authoritative, byte-for-byte, not merely "not deleted"
+        assertEquals(record, repo.find("approval-dup").orElseThrow());
     }
 
     @Test
@@ -491,7 +642,10 @@ class Phase2c1Tests {
     }
 
     @Test
-    void issueSupersedingStillIssuesNewApprovalWhenPriorAlreadyInactive() {
+    void issueSupersedingLeavesNoOrphanedNewApprovalWhenPriorAlreadyInactive() {
+        // createAndSupersede is all-or-nothing: if the prior approval cannot be transitioned, the
+        // new approval must not exist either - never left behind as a standalone ACTIVE approval
+        // nobody intended to stand on its own.
         InMemoryApprovalRepository repo = new InMemoryApprovalRepository();
         ApprovalRecordProducer producer = producer(repo, new MutableClock(NOW));
         String oldId = producer.issue(baseRequest("sha256:aaa"), APPROVER);
@@ -500,9 +654,8 @@ class Phase2c1Tests {
         SupersedingIssuanceResult result = producer.issueSuperseding(baseRequest("sha256:bbb"), APPROVER, oldId);
 
         assertEquals(TransitionOutcome.ALREADY_TRANSITIONED, result.priorApprovalTransition());
-        assertNotNull(result.newApprovalId());
-        ApprovalProvider provider = new RepositoryBackedApprovalProvider(repo);
-        assertTrue(ApprovalValidator.validate(provider, result.newApprovalId(), baseIdentity("sha256:bbb"), NOW.plus(Duration.ofMinutes(2))).isValid());
+        assertNull(result.newApprovalId(), "no new approval may exist when its whole reason for being issued - superseding this prior - failed");
+        assertEquals(ApprovalStatus.REVOKED, repo.find(oldId).orElseThrow().status(), "the prior approval must remain exactly as it was (still REVOKED, not further altered)");
     }
 
     @Test
