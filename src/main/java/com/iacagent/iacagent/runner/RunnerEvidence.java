@@ -39,14 +39,24 @@ public record RunnerEvidence(
         RunnerState finalState,
         List<RunnerReasonCode> reasonCodes,
         Instant startedAt,
-        Instant completedAt
+        Instant completedAt,
+        TerraformProcessEvidence terraformProcessEvidence
 ) {
     public RunnerEvidence {
         reasonCodes = reasonCodes == null ? List.of() : List.copyOf(reasonCodes);
         runnerEnvironmentScope = runnerEnvironmentScope == null ? Set.of() : Set.copyOf(runnerEnvironmentScope);
+        // terraformProcessEvidence is deliberately nullable - non-null only for the Phase 2B-3
+        // TERRAFORM_VERSION/TERRAFORM_FMT_CHECK/TERRAFORM_SHOW_PLAN_JSON operations; every
+        // pre-2B-3 operation (and any 2B-3 attempt that BLOCKED before a Terraform process was ever
+        // attempted) carries null here, same as observedPlanSha256 etc. being null before their
+        // corresponding check ever ran.
     }
 
     public boolean isReadyForFutureExecution() {
         return finalState == RunnerState.READY_FOR_FUTURE_EXECUTION;
+    }
+
+    public boolean isTerraformProcessCompleted() {
+        return finalState == RunnerState.TERRAFORM_PROCESS_COMPLETED;
     }
 }

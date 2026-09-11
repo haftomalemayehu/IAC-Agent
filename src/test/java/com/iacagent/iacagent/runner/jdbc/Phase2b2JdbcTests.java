@@ -49,7 +49,7 @@ class Phase2b2JdbcTests {
                 request.requestedOperation(), request.repository(), request.commitSha(), request.environment(),
                 request.planArtifactId(), request.planSha256(), request.planSha256(),
                 request.terraformVersion(), request.terraformVersion(), request.providerLockHash(), request.providerLockHash(),
-                request.approvalId(), ApprovalValidationReasonCode.VALID, finalState, reasonCodes, NOW, NOW.plusSeconds(1));
+                request.approvalId(), ApprovalValidationReasonCode.VALID, finalState, reasonCodes, NOW, NOW.plusSeconds(1), null);
     }
 
     // A claim made before a restart, with no terminal evidence yet recorded, remains CLAIMED (never

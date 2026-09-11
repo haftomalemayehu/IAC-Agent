@@ -47,7 +47,12 @@ public final class ControlledRunner {
     private final RunnerWorkspaceManager workspaceManager;
     private final RunnerLedgerRepository ledger;
     private final Clock clock;
+    private final ControlledTerraformOperationCoordinator terraformCoordinator;
 
+    /** Pre-Phase-2B-3 constructor - no Terraform process capability at all. A request for
+     * {@code TERRAFORM_VERSION}/{@code TERRAFORM_FMT_CHECK}/{@code TERRAFORM_SHOW_PLAN_JSON}
+     * against a runner built this way is BLOCKED / {@code TERRAFORM_OPERATION_NOT_ALLOWED}, never
+     * an NPE - a runner not wired for Terraform simply does not support asking for it. */
     public ControlledRunner(
             RunnerIdentityProvider identityProvider,
             Set<String> allowedRunnerClasses,
@@ -58,6 +63,23 @@ public final class ControlledRunner {
             RunnerLedgerRepository ledger,
             Clock clock
     ) {
+        this(identityProvider, allowedRunnerClasses, approvalProvider, artifactStore, toolchainContext, workspaceManager, ledger, clock, null);
+    }
+
+    /** Phase 2B-3: {@code terraformCoordinator} may be null (same behavior as the shorter
+     * constructor above) - it is never a required dependency of the identity/approval/artifact
+     * pipeline the other seven parameters govern. */
+    public ControlledRunner(
+            RunnerIdentityProvider identityProvider,
+            Set<String> allowedRunnerClasses,
+            ApprovalProvider approvalProvider,
+            RunnerArtifactStore artifactStore,
+            RunnerToolchainContext toolchainContext,
+            RunnerWorkspaceManager workspaceManager,
+            RunnerLedgerRepository ledger,
+            Clock clock,
+            ControlledTerraformOperationCoordinator terraformCoordinator
+    ) {
         this.identityProvider = require(identityProvider, "identityProvider");
         this.allowedRunnerClasses = allowedRunnerClasses == null ? Set.of() : Set.copyOf(allowedRunnerClasses);
         this.approvalProvider = require(approvalProvider, "approvalProvider");
@@ -66,6 +88,7 @@ public final class ControlledRunner {
         this.workspaceManager = require(workspaceManager, "workspaceManager");
         this.ledger = require(ledger, "ledger");
         this.clock = require(clock, "clock");
+        this.terraformCoordinator = terraformCoordinator;
     }
 
     private static <T> T require(T value, String name) {
@@ -206,8 +229,15 @@ public final class ControlledRunner {
             return verifyContext(request, startedAt, identity, approvalResult.reasonCode());
         }
 
+        // --- Phase 2B-3: TERRAFORM_VERSION needs no artifact at all - it only asks whether the
+        // trusted binary is the version we expect. ---
+        if (request.requestedOperation() == RunnerOperation.TERRAFORM_VERSION) {
+            return runTerraformVersion(request, startedAt, identity, approvalResult.reasonCode());
+        }
+
         // --- Artifact: independently resolved and re-hashed, never trusted from the request or
-        // from the store's own recorded hash alone. ---
+        // from the store's own recorded hash alone. Shared by VERIFY_ARTIFACT, PREPARE_EXECUTION,
+        // and the two remaining Phase 2B-3 operations - only the staging call differs. ---
         Optional<StoredArtifact> stored = artifactStore.resolve(request.planArtifactId());
         if (stored.isEmpty()) {
             return blocked(request, startedAt, RunnerReasonCode.ARTIFACT_NOT_FOUND, identity, null, approvalResult.reasonCode(), null, null);
@@ -220,9 +250,12 @@ public final class ControlledRunner {
         }
 
         Path workspace;
+        Path stagedPath;
         try {
             workspace = workspaceManager.createWorkspace(request.runnerRequestId());
-            workspaceManager.stageArtifact(workspace, observedSha256, stored.get().content());
+            stagedPath = request.requestedOperation() == RunnerOperation.TERRAFORM_FMT_CHECK
+                    ? workspaceManager.stageTerraformConfigFile(workspace, observedSha256, stored.get().content())
+                    : workspaceManager.stageArtifact(workspace, observedSha256, stored.get().content());
         } catch (RuntimeException e) {
             return blockedWithObservedHash(request, startedAt, RunnerReasonCode.ARTIFACT_STAGING_FAILURE,
                     identity, observedSha256, approvalResult.reasonCode());
@@ -233,6 +266,14 @@ public final class ControlledRunner {
             RunnerEvidence evidence = evidenceOf(request, startedAt, clock.instant(), RunnerState.ARTIFACT_VERIFIED, List.of(),
                     identity, observedSha256, approvalResult.reasonCode(), null, null);
             return new PipelineOutcome(evidence, workspace);
+        }
+
+        if (request.requestedOperation() == RunnerOperation.TERRAFORM_FMT_CHECK) {
+            return runTerraformFmtCheck(request, startedAt, identity, observedSha256, approvalResult.reasonCode(), workspace);
+        }
+
+        if (request.requestedOperation() == RunnerOperation.TERRAFORM_SHOW_PLAN_JSON) {
+            return runTerraformShowPlanJson(request, startedAt, identity, observedSha256, approvalResult.reasonCode(), workspace, stagedPath);
         }
 
         // --- Context: runner-observed Terraform version / provider-lock hash, never the
@@ -268,6 +309,70 @@ public final class ControlledRunner {
         RunnerEvidence evidence = evidenceOf(request, startedAt, clock.instant(), RunnerState.CONTEXT_VERIFIED, List.of(),
                 identity, null, approvalReason, observedTerraformVersion, observedProviderLockHash);
         return new PipelineOutcome(evidence, null);
+    }
+
+    /**
+     * Phase 2B-3: {@code TERRAFORM_VERSION} needs a fresh workspace (as a Terraform working
+     * directory) but no plan/config artifact - the request is still scoped to a specific
+     * approval/plan context, but this operation itself never touches that plan's content.
+     */
+    private PipelineOutcome runTerraformVersion(RunnerRequest request, Instant startedAt, RunnerIdentity identity, ApprovalValidationReasonCode approvalReason) {
+        if (terraformCoordinator == null) {
+            return blocked(request, startedAt, RunnerReasonCode.TERRAFORM_OPERATION_NOT_ALLOWED, identity, null, approvalReason, null, null);
+        }
+        Path workspace;
+        try {
+            workspace = workspaceManager.createWorkspace(request.runnerRequestId());
+        } catch (RuntimeException e) {
+            return blocked(request, startedAt, RunnerReasonCode.WORKSPACE_ISOLATION_FAILURE, identity, null, approvalReason, null, null);
+        }
+        TerraformProcessEvidence tfEvidence = terraformCoordinator.executeVersion(request, identity, workspace);
+        return fromTerraformEvidence(request, startedAt, identity, null, approvalReason, tfEvidence, workspace);
+    }
+
+    /** Phase 2B-3: {@code TERRAFORM_FMT_CHECK} - the artifact/workspace staging already happened
+     * in {@link #runClaimedPipeline} (staged as a {@code .tf} file, not {@code .tfplan}) before
+     * this is called. */
+    private PipelineOutcome runTerraformFmtCheck(
+            RunnerRequest request, Instant startedAt, RunnerIdentity identity, String observedSha256, ApprovalValidationReasonCode approvalReason, Path workspace) {
+        if (terraformCoordinator == null) {
+            RunnerEvidence evidence = evidenceOf(request, startedAt, clock.instant(), RunnerState.BLOCKED,
+                    List.of(RunnerReasonCode.TERRAFORM_OPERATION_NOT_ALLOWED), identity, observedSha256, approvalReason, null, null);
+            return new PipelineOutcome(evidence, workspace);
+        }
+        TerraformProcessEvidence tfEvidence = terraformCoordinator.executeFmtCheck(request, identity, workspace);
+        return fromTerraformEvidence(request, startedAt, identity, observedSha256, approvalReason, tfEvidence, workspace);
+    }
+
+    /** Phase 2B-3: {@code TERRAFORM_SHOW_PLAN_JSON} - {@code stagedPlanPath} is always the
+     * already-hash-verified, runner-staged plan from {@link #runClaimedPipeline}; the coordinator
+     * still re-verifies its hash immediately before launching {@code terraform show} (the final
+     * TOCTOU check), never trusting this earlier verification alone. */
+    private PipelineOutcome runTerraformShowPlanJson(RunnerRequest request, Instant startedAt, RunnerIdentity identity, String observedSha256,
+                                                      ApprovalValidationReasonCode approvalReason, Path workspace, Path stagedPlanPath) {
+        if (terraformCoordinator == null) {
+            RunnerEvidence evidence = evidenceOf(request, startedAt, clock.instant(), RunnerState.BLOCKED,
+                    List.of(RunnerReasonCode.TERRAFORM_OPERATION_NOT_ALLOWED), identity, observedSha256, approvalReason, null, null);
+            return new PipelineOutcome(evidence, workspace);
+        }
+        TerraformProcessEvidence tfEvidence = terraformCoordinator.executeShowPlanJson(request, identity, workspace, stagedPlanPath, observedSha256);
+        return fromTerraformEvidence(request, startedAt, identity, observedSha256, approvalReason, tfEvidence, workspace);
+    }
+
+    /** Maps a {@link TerraformProcessEvidence} into the enclosing {@link RunnerEvidence}/
+     * {@link RunnerState}: {@code SUCCEEDED} and {@code COMMAND_REPORTED_DIFFERENCE} (fmt-check
+     * found differences - a legitimate, deterministic outcome, never a failure) both become
+     * {@link RunnerState#TERRAFORM_PROCESS_COMPLETED}; every other {@link TerraformProcessState}
+     * becomes {@link RunnerState#BLOCKED}, carrying whatever reason codes the coordinator already
+     * attached. */
+    private PipelineOutcome fromTerraformEvidence(RunnerRequest request, Instant startedAt, RunnerIdentity identity, String observedPlanSha256,
+                                                   ApprovalValidationReasonCode approvalReason, TerraformProcessEvidence tfEvidence, Path workspace) {
+        boolean succeeded = tfEvidence.processState() == TerraformProcessState.SUCCEEDED
+                || tfEvidence.processState() == TerraformProcessState.COMMAND_REPORTED_DIFFERENCE;
+        RunnerState finalState = succeeded ? RunnerState.TERRAFORM_PROCESS_COMPLETED : RunnerState.BLOCKED;
+        RunnerEvidence evidence = evidenceOf(request, startedAt, tfEvidence.completedAt(), finalState, tfEvidence.reasonCodes(),
+                identity, observedPlanSha256, approvalReason, tfEvidence.terraformVersionObserved(), null, tfEvidence);
+        return new PipelineOutcome(evidence, workspace);
     }
 
     private PipelineOutcome blockedWithContext(RunnerRequest request, Instant startedAt, RunnerReasonCode reason, RunnerIdentity identity,
@@ -309,6 +414,15 @@ public final class ControlledRunner {
             RunnerIdentity identity, String observedPlanSha256, ApprovalValidationReasonCode approvalReason,
             String terraformVersionObserved, String providerLockHashObserved
     ) {
+        return evidenceOf(request, startedAt, completedAt, finalState, reasonCodes, identity, observedPlanSha256, approvalReason,
+                terraformVersionObserved, providerLockHashObserved, null);
+    }
+
+    private RunnerEvidence evidenceOf(
+            RunnerRequest request, Instant startedAt, Instant completedAt, RunnerState finalState, List<RunnerReasonCode> reasonCodes,
+            RunnerIdentity identity, String observedPlanSha256, ApprovalValidationReasonCode approvalReason,
+            String terraformVersionObserved, String providerLockHashObserved, TerraformProcessEvidence terraformProcessEvidence
+    ) {
         return new RunnerEvidence(
                 request.runnerRequestId(),
                 identity == null ? null : identity.runnerId(),
@@ -330,7 +444,8 @@ public final class ControlledRunner {
                 finalState,
                 reasonCodes,
                 startedAt,
-                completedAt
+                completedAt,
+                terraformProcessEvidence
         );
     }
 

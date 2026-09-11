@@ -439,9 +439,14 @@ class Phase2b1Tests {
     @Test
     void runnerOperationHasNoMutationValue() {
         Set<String> operationNames = Arrays.stream(RunnerOperation.values()).map(Enum::name).collect(Collectors.toSet());
-        assertEquals(Set.of("VERIFY_ARTIFACT", "VERIFY_CONTEXT", "PREPARE_EXECUTION"), operationNames);
-        for (String forbidden : List.of("APPLY", "DESTROY", "IMPORT", "STATE_RM", "STATE_MV", "FORCE_UNLOCK", "SHELL", "EXECUTE")) {
-            assertFalse(operationNames.contains(forbidden));
+        // Phase 2B-3 added TERRAFORM_VERSION/TERRAFORM_FMT_CHECK/TERRAFORM_SHOW_PLAN_JSON - all
+        // non-mutating (they launch a real process for the first time, but none of the three can
+        // change infrastructure, state, or configuration) - see docs/phase-2b3-controlled-terraform-process.md.
+        assertEquals(Set.of("VERIFY_ARTIFACT", "VERIFY_CONTEXT", "PREPARE_EXECUTION",
+                "TERRAFORM_VERSION", "TERRAFORM_FMT_CHECK", "TERRAFORM_SHOW_PLAN_JSON"), operationNames);
+        for (String forbidden : List.of("APPLY", "DESTROY", "IMPORT", "STATE_RM", "STATE_MV", "FORCE_UNLOCK", "SHELL", "EXECUTE",
+                "INIT", "VALIDATE", "PLAN", "PROVIDERS_SCHEMA", "REFRESH", "TAINT", "UNTAINT", "WORKSPACE")) {
+            assertFalse(operationNames.contains(forbidden), forbidden + " must not be a representable RunnerOperation");
         }
     }
 
@@ -470,8 +475,13 @@ class Phase2b1Tests {
                 "execute() must not accept a raw String (command/shell) parameter");
     }
 
+    // As of Phase 2B-3, ProcessBuilder is intentionally permitted in exactly one place -
+    // ControlledTerraformProcess, the dedicated, narrow process boundary. This test now enforces
+    // that narrower invariant rather than an absolute absence - see Phase2b3Tests for the fuller
+    // Phase 2B-3 source-scan (Runtime.exec, shell invocation, and the full terraform-apply-family
+    // literal list) that still applies package-wide with no exception.
     @Test
-    void runnerPackageContainsNoProcessInvocation() throws Exception {
+    void runnerPackageContainsNoProcessInvocationOutsideTheControlledTerraformProcessClass() throws Exception {
         Path sourceDir = Path.of("src/main/java/com/iacagent/iacagent/runner");
         if (!Files.isDirectory(sourceDir)) {
             return; // not available in this execution context (e.g. packaged jar) - best-effort check
@@ -479,7 +489,10 @@ class Phase2b1Tests {
         try (var files = Files.walk(sourceDir)) {
             for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
                 String content = Files.readString(file);
-                assertFalse(content.contains("ProcessBuilder"), file + " must not reference ProcessBuilder");
+                boolean isTheOneAllowedProcessBoundaryClass = file.getFileName().toString().equals("ControlledTerraformProcess.java");
+                if (!isTheOneAllowedProcessBoundaryClass) {
+                    assertFalse(content.contains("ProcessBuilder"), file + " must not reference ProcessBuilder");
+                }
                 assertFalse(content.contains("Runtime.getRuntime().exec"), file + " must not invoke Runtime.exec");
             }
         }

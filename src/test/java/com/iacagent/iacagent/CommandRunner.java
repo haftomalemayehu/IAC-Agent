@@ -11,6 +11,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
+/**
+ * Phase 2B-3 final amendment: this class lives under {@code src/test} on purpose. It was formerly
+ * a {@code src/main} class exposing a generic {@code String... command} + {@link ProcessBuilder}
+ * execution surface guarded only by a denylist - a second, unrestricted process-spawning boundary
+ * that coexisted with (and could bypass) the closed-enum/trusted-executable model in
+ * {@code com.iacagent.iacagent.runner}. Removing the one Spring endpoint that reached it
+ * (see the prior amendment) made it unreachable at runtime, but the capability itself still existed
+ * in production source. It has been moved here - test-only compilation scope, never packaged into
+ * the running application - so that {@code Phase1bTests} can keep exercising it directly while
+ * {@code src/main} contains no generic arbitrary-executable-plus-argv execution capability at all.
+ * See {@code docs/phase-2b3-controlled-terraform-process.md} SS13 for the full history.
+ */
 public class CommandRunner {
     private static final Pattern SECRET_PATTERN = Pattern.compile("(?i)(aws_access_key_id|aws_secret_access_key|secret|token|password|private[_ -]?key|api[_ -]?key)\\s*[:=]\\s*([^\\s\"']+)");
 

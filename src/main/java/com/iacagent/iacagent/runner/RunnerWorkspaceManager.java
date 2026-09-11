@@ -2,15 +2,20 @@ package com.iacagent.iacagent.runner;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -93,6 +98,151 @@ public final class RunnerWorkspaceManager {
             return target;
         } catch (IOException e) {
             throw new RunnerWorkspaceException("failed to stage artifact into workspace " + workspace, e);
+        }
+    }
+
+    /**
+     * Phase 2B-3: stages Terraform configuration content (for {@code TERRAFORM_FMT_CHECK}) under a
+     * content-addressed {@code .tf} filename - a sibling of {@link #stageArtifact}, not a
+     * modification of it, since that method's {@code .tfplan} suffix is specific to plan artifacts
+     * and {@code terraform fmt} needs to find ordinary {@code .tf} files in the directory it scans.
+     * Same write-to-temp-then-atomic-rename-then-read-only discipline.
+     */
+    public Path stageTerraformConfigFile(Path workspace, String sha256Hex, byte[] content) {
+        try {
+            Path target = workspace.resolve("sha256-" + sha256Hex + ".tf");
+            requireUnderRoot(target.normalize(), rootDirectory);
+            Path temp = Files.createTempFile(workspace, "staging-", ".tmp");
+            Files.write(temp, content);
+            Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            requireUnderRoot(target.toRealPath(), rootDirectory.toRealPath());
+            makeReadOnlyBestEffort(target);
+            return target;
+        } catch (IOException e) {
+            throw new RunnerWorkspaceException("failed to stage Terraform configuration file into workspace " + workspace, e);
+        }
+    }
+
+    /**
+     * Phase 2B-3 amendment: safely stages every {@code .tf} file found under an UNTRUSTED
+     * repository-checkout source tree into {@code workspace}, for {@code TERRAFORM_FMT_CHECK}
+     * against a full checkout rather than a single pre-resolved artifact blob. Repository content is
+     * never trusted merely because it lives under a checkout root the caller vouches for - only
+     * {@code sourceRoot} itself is trusted (as "this is where THIS request's checkout lives"), never
+     * anything reachable through it via a symlink:
+     * <ul>
+     *   <li>{@code sourceRoot} is resolved to its real path once, at the start of the call; it must
+     *       already exist as a real directory.
+     *   <li>Every visited entry - whether or not it ends in {@code .tf} - is rejected outright if it
+     *       is itself a symlink ({@link Files#isSymbolicLink}), BEFORE any name/extension check.
+     *       {@link Files#walkFileTree} does not follow symlinks by default, but critically it still
+     *       delivers a symlinked directory to {@code visitFile} (never {@code preVisitDirectory})
+     *       rather than silently skipping it, so checking for a symlink unconditionally - not just
+     *       on {@code .tf}-named entries - is what catches an ancestor-directory symlink escape like
+     *       {@code repo/subdir -> /outside}, not only a direct leaf symlink like
+     *       {@code repo/evil.tf -> /outside/secret}.
+     *   <li>Every {@code .tf} file's real path must still fall under {@code sourceRoot}'s real path,
+     *       and must be a genuine regular file.
+     *   <li>Individual file size and the running aggregate across the whole tree are both bounded
+     *       (constructor-supplied limits) - repository content must not be given an unbounded local
+     *       resource-exhaustion path via {@code fmt -recursive}.
+     * </ul>
+     * The WHOLE staging attempt is rejected atomically on the first violation of any of the above -
+     * never a partial result mixing some trusted staged files with some skipped/rejected ones. Each
+     * accepted file is staged via {@link #stageTerraformConfigFile} (content-addressed destination
+     * filename - the original repository-relative path/name is never used as, or to derive, the
+     * destination path).
+     *
+     * <p><b>Not yet wired into {@link ControlledRunner}</b>: the current {@code TERRAFORM_FMT_CHECK}
+     * pipeline stages a single pre-resolved artifact blob via {@link RunnerArtifactStore}/
+     * {@link #stageTerraformConfigFile}, which involves no filesystem traversal of repository
+     * content at all and is not vulnerable to the symlink-escape scenario this method defends
+     * against. This method is the safe, fully-tested primitive a future phase would use once it
+     * introduces an actual "repository checkout root" concept into the request pipeline - see
+     * {@code docs/phase-2b3-controlled-terraform-process.md} for the full reasoning.
+     */
+    public TerraformConfigStagingResult stageTerraformConfigDirectory(
+            Path sourceRoot, Path workspace, long maxIndividualFileBytes, long maxAggregateBytes) {
+        if (sourceRoot == null) {
+            throw new IllegalArgumentException("sourceRoot is required");
+        }
+        if (maxIndividualFileBytes <= 0 || maxAggregateBytes <= 0) {
+            throw new IllegalArgumentException("size bounds must be positive");
+        }
+        Path sourceRootReal;
+        try {
+            sourceRootReal = sourceRoot.toRealPath();
+        } catch (IOException e) {
+            return TerraformConfigStagingResult.failure(RunnerReasonCode.TERRAFORM_CONFIG_SOURCE_UNSAFE);
+        }
+        List<Path> stagedFiles = new ArrayList<>();
+        long[] aggregateBytes = {0L};
+        try {
+            Files.walkFileTree(sourceRootReal, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    if (Files.isSymbolicLink(file)) {
+                        throw new UnsafeConfigSourceException();
+                    }
+                    if (!file.getFileName().toString().endsWith(".tf")) {
+                        return FileVisitResult.CONTINUE;
+                    }
+                    Path real = file.toRealPath();
+                    if (!real.startsWith(sourceRootReal) || !Files.isRegularFile(real)) {
+                        throw new UnsafeConfigSourceException();
+                    }
+                    long size = Files.size(real);
+                    if (size > maxIndividualFileBytes) {
+                        throw new ConfigSizeLimitException();
+                    }
+                    aggregateBytes[0] += size;
+                    if (aggregateBytes[0] > maxAggregateBytes) {
+                        throw new ConfigSizeLimitException();
+                    }
+                    byte[] content = Files.readAllBytes(real);
+                    stagedFiles.add(stageTerraformConfigFile(workspace, contentSha256Hex(content), content));
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (UnsafeConfigSourceException e) {
+            return TerraformConfigStagingResult.failure(RunnerReasonCode.TERRAFORM_CONFIG_SOURCE_UNSAFE);
+        } catch (ConfigSizeLimitException e) {
+            return TerraformConfigStagingResult.failure(RunnerReasonCode.TERRAFORM_CONFIG_SIZE_LIMIT_EXCEEDED);
+        } catch (IOException | RunnerWorkspaceException e) {
+            return TerraformConfigStagingResult.failure(RunnerReasonCode.TERRAFORM_CONFIG_SOURCE_UNSAFE);
+        }
+        return TerraformConfigStagingResult.success(stagedFiles);
+    }
+
+    private static final class UnsafeConfigSourceException extends IOException {
+    }
+
+    private static final class ConfigSizeLimitException extends IOException {
+    }
+
+    private static String contentSha256Hex(byte[] content) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(content));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 must be available on any supported JVM", e);
+        }
+    }
+
+    /**
+     * Phase 2B-3: re-verifies a previously-created workspace still resolves safely under the
+     * configured root, immediately before a Terraform process launch - the TOCTOU discipline
+     * established for identity/executable trust in Phase 2B-2/2B-3 applies equally to the working
+     * directory a process is about to be launched in, rather than relying solely on the check
+     * {@link #createWorkspace} performed possibly minutes earlier in the same request's pipeline.
+     */
+    public Path revalidate(Path workspace) {
+        try {
+            Path real = workspace.toRealPath();
+            requireUnderRoot(real, rootDirectory.toRealPath());
+            return real;
+        } catch (IOException e) {
+            throw new RunnerWorkspaceException("workspace failed pre-launch revalidation: " + workspace, e);
         }
     }
 

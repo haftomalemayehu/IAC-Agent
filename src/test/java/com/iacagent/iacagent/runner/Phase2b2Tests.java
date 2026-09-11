@@ -241,7 +241,7 @@ class Phase2b2Tests {
                 request.planArtifactId(), request.planSha256(), request.planSha256(),
                 request.terraformVersion(), request.terraformVersion(), request.providerLockHash(), request.providerLockHash(),
                 request.approvalId(), com.iacagent.iacagent.approval.ApprovalValidationReasonCode.VALID,
-                finalState, reasonCodes, NOW, NOW.plusSeconds(1));
+                finalState, reasonCodes, NOW, NOW.plusSeconds(1), null);
     }
 
     // ===================== Canonical request fingerprint (unambiguous encoding) =====================
@@ -756,8 +756,12 @@ class Phase2b2Tests {
         if (!Files.isDirectory(sourceDir)) {
             return;
         }
+        // "ProcessBuilder" is deliberately NOT in this list as of Phase 2B-3, which permits it in
+        // exactly one dedicated class (ControlledTerraformProcess) - see
+        // Phase2b3Tests#processBuilderAppearsOnlyInControlledTerraformProcess for that narrower,
+        // still-enforced invariant, and Phase2b1Tests#runnerPackageContainsNoProcessInvocationOutsideTheControlledTerraformProcessClass.
         List<String> forbiddenLiterals = List.of(
-                "ProcessBuilder", "Runtime.getRuntime().exec", "Runtime.exec",
+                "Runtime.getRuntime().exec", "Runtime.exec",
                 "/bin/sh", "\"bash\"", "cmd.exe", "powershell",
                 "terraform apply", "terraform destroy", "terraform import", "terraform force-unlock");
         try (var files = Files.walk(sourceDir)) {

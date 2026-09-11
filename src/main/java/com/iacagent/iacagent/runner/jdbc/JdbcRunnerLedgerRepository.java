@@ -126,6 +126,7 @@ public final class JdbcRunnerLedgerRepository implements RunnerLedgerRepository 
                     runner_id = ?, runner_class = ?, runner_environment_scope = ?,
                     observed_plan_sha256 = ?, terraform_version_observed = ?, provider_lock_hash_observed = ?,
                     approval_validation_result = ?, final_state = ?, reason_codes = ?, completed_at = ?,
+                    terraform_process_evidence = ?,
                     version = version + 1, updated_at = ?
                 WHERE runner_request_id = ? AND claim_state = 'CLAIMED'
                 """;
@@ -143,6 +144,7 @@ public final class JdbcRunnerLedgerRepository implements RunnerLedgerRepository 
             ps.setString(i++, evidence.finalState() == null ? null : evidence.finalState().name());
             ps.setString(i++, joinReasonCodesOrNull(evidence.reasonCodes()));
             setInstant(ps, i++, evidence.completedAt());
+            ps.setString(i++, TerraformProcessEvidenceJson.toJson(evidence.terraformProcessEvidence()));
             setInstant(ps, i++, evidence.completedAt());
             ps.setString(i, evidence.runnerRequestId());
             updated = ps.executeUpdate();
@@ -257,7 +259,8 @@ public final class JdbcRunnerLedgerRepository implements RunnerLedgerRepository 
                 finalStateRaw == null ? null : RunnerState.valueOf(finalStateRaw),
                 reasonCodes,
                 readInstant(rs, "started_at"),
-                readInstant(rs, "completed_at")
+                readInstant(rs, "completed_at"),
+                TerraformProcessEvidenceJson.fromJson(rs.getString("terraform_process_evidence"))
         );
     }
 
