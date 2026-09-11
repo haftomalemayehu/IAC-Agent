@@ -158,13 +158,17 @@ class Phase2b1Tests {
                 TERRAFORM_VERSION, PROVIDER_LOCK_HASH, approvalId, RunnerOperation.PREPARE_EXECUTION);
     }
 
+    private static final Set<String> ALLOWED_RUNNER_CLASSES = Set.of("static-test-runner");
+
     private ControlledRunner newRunner(Path root, RunnerIdentity identity, ApprovalProvider approvalProvider, InMemoryRunnerArtifactStore artifactStore) {
         return new ControlledRunner(
                 new StaticRunnerIdentityProvider(identity),
+                ALLOWED_RUNNER_CLASSES,
                 approvalProvider,
                 artifactStore,
                 new StaticRunnerToolchainContext(TERRAFORM_VERSION, PROVIDER_LOCK_HASH),
                 new RunnerWorkspaceManager(root),
+                new InMemoryRunnerLedgerRepository(),
                 new MutableClock(NOW)
         );
     }
@@ -267,10 +271,12 @@ class Phase2b1Tests {
 
         ControlledRunner runner = new ControlledRunner(
                 new StaticRunnerIdentityProvider(trustedIdentity()),
+                ALLOWED_RUNNER_CLASSES,
                 new RepositoryBackedApprovalProvider(repo),
                 artifactStore,
                 new StaticRunnerToolchainContext(TERRAFORM_VERSION, PROVIDER_LOCK_HASH),
                 new RunnerWorkspaceManager(root),
+                new InMemoryRunnerLedgerRepository(),
                 new MutableClock(NOW.plus(Duration.ofHours(1))));
 
         RunnerEvidence evidence = runner.execute(baseRequestBuilder("req-1", "artifact-1", approvalId).build());
@@ -524,28 +530,52 @@ class Phase2b1Tests {
 
         assertEquals(RunnerState.READY_FOR_FUTURE_EXECUTION, resultA.get().finalState());
         assertEquals(RunnerState.READY_FOR_FUTURE_EXECUTION, resultB.get().finalState());
+        // Each request's evidence carries only its own observed hash - never the other request's -
+        // which is exactly what would fail to hold if the two requests shared a workspace or one
+        // request's staged bytes leaked into the other's verification.
         assertEquals(shaA, resultA.get().observedPlanSha256());
         assertEquals(shaB, resultB.get().observedPlanSha256());
 
-        // Workspace directory names are hash-derived, not the raw runnerRequestId (see the
-        // filesystem-hardening tests below) - so isolation is verified black-box, by listing the
-        // actual directories created under root, rather than by predicting a name.
-        List<Path> workspaces;
+        // Since Phase 2B-2, ControlledRunner cleans up each request's workspace immediately after
+        // its terminal evidence is durably recorded (see RunnerWorkspaceManager#cleanup), so no
+        // filesystem trace of either workspace is expected to survive execute() returning; the
+        // per-workspace isolation guarantee itself (separate dirs, no cross-contamination of
+        // staged bytes) is covered directly against RunnerWorkspaceManager, bypassing cleanup, in
+        // workspaceManagerKeepsConcurrentRequestsIsolatedBeforeCleanup below.
         try (var listing = Files.list(root)) {
-            workspaces = listing.filter(Files::isDirectory).toList();
+            assertEquals(0, listing.filter(Files::isDirectory).count(),
+                    "both requests' workspaces must be cleaned up after their evidence is recorded, with no cross-request leftovers");
         }
-        assertEquals(2, workspaces.size(), "exactly two workspace directories must exist, one per request");
-        Path workspaceContainingA = workspaces.stream().filter(w -> Files.exists(w.resolve("sha256-" + shaA + ".tfplan"))).findFirst().orElseThrow();
-        Path workspaceContainingB = workspaces.stream().filter(w -> Files.exists(w.resolve("sha256-" + shaB + ".tfplan"))).findFirst().orElseThrow();
-        assertNotEquals(workspaceContainingA, workspaceContainingB, "A and B must be staged into different workspaces");
+    }
 
-        // real isolation, not just different ids: each workspace contains ONLY its own artifact
-        assertFalse(Files.exists(workspaceContainingA.resolve("sha256-" + shaB + ".tfplan")), "A's workspace must not contain B's artifact");
-        assertFalse(Files.exists(workspaceContainingB.resolve("sha256-" + shaA + ".tfplan")), "B's workspace must not contain A's artifact");
+    // 20. isolation guarantee at the layer that actually owns it: two concurrent requests get
+    // distinct, content-addressed directories, and neither can see the other's staged artifact -
+    // verified directly against RunnerWorkspaceManager, before ControlledRunner's post-recording
+    // cleanup would otherwise remove the evidence from disk.
+    @Test
+    void workspaceManagerKeepsConcurrentRequestsIsolatedBeforeCleanup(@TempDir Path root) throws Exception {
+        RunnerWorkspaceManager manager = new RunnerWorkspaceManager(root);
+        byte[] planA = "plan-A-bytes".getBytes(StandardCharsets.UTF_8);
+        byte[] planB = "plan-B-bytes-longer".getBytes(StandardCharsets.UTF_8);
+        String shaA = sha256Hex(planA);
+        String shaB = sha256Hex(planB);
 
-        // and content actually matches - not merely file presence
-        assertArrayEquals(planA, Files.readAllBytes(workspaceContainingA.resolve("sha256-" + shaA + ".tfplan")));
-        assertArrayEquals(planB, Files.readAllBytes(workspaceContainingB.resolve("sha256-" + shaB + ".tfplan")));
+        Path workspaceA = manager.createWorkspace("req-A");
+        Path workspaceB = manager.createWorkspace("req-B");
+        assertNotEquals(workspaceA, workspaceB, "distinct requests must never share a workspace directory");
+
+        Path stagedA = manager.stageArtifact(workspaceA, shaA, planA);
+        Path stagedB = manager.stageArtifact(workspaceB, shaB, planB);
+
+        assertFalse(Files.exists(workspaceA.resolve(stagedB.getFileName())), "A's workspace must not contain B's artifact");
+        assertFalse(Files.exists(workspaceB.resolve(stagedA.getFileName())), "B's workspace must not contain A's artifact");
+        assertArrayEquals(planA, Files.readAllBytes(stagedA));
+        assertArrayEquals(planB, Files.readAllBytes(stagedB));
+
+        // cleanup of one request's workspace must never touch the other's
+        assertTrue(manager.cleanup(workspaceA));
+        assertFalse(Files.exists(workspaceA), "A's workspace must be gone after its own cleanup");
+        assertTrue(Files.exists(stagedB), "B's workspace and artifact must survive A's cleanup");
     }
 
     private static void awaitUninterruptibly(CountDownLatch latch) {
@@ -654,10 +684,12 @@ class Phase2b1Tests {
         MutableClock runnerClock = new MutableClock(NOW);
         ControlledRunner runner = new ControlledRunner(
                 new StaticRunnerIdentityProvider(trustedIdentity()),
+                ALLOWED_RUNNER_CLASSES,
                 new RepositoryBackedApprovalProvider(repo),
                 artifactStore,
                 new StaticRunnerToolchainContext(TERRAFORM_VERSION, PROVIDER_LOCK_HASH),
                 new RunnerWorkspaceManager(root),
+                new InMemoryRunnerLedgerRepository(),
                 runnerClock);
 
         RunnerRequest request = baseRequestBuilder("req-expired-replay", "artifact-1", approvalId).build();

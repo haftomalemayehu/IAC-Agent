@@ -8,6 +8,10 @@ package com.iacagent.iacagent.runner;
  */
 public enum RunnerState {
     RECEIVED,
+    /** The durable ledger has atomically claimed this runnerRequestId - added in Phase 2B-2, since
+     * a claim can now fail closed (RUNNER_LEDGER_UNAVAILABLE, duplicate, fingerprint mismatch,
+     * incomplete prior claim) before identity is ever resolved. */
+    REQUEST_CLAIMED,
     IDENTITY_RESOLVED,
     APPROVAL_RESOLVED,
     ARTIFACT_RESOLVED,
