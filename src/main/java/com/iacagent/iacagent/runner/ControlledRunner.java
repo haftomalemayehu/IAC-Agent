@@ -91,6 +91,20 @@ public final class ControlledRunner {
         this.terraformCoordinator = terraformCoordinator;
     }
 
+    /** Operations whose resolved artifact represents Terraform configuration content (staged as a
+     * {@code .tf} file) rather than a saved plan (staged as {@code .tfplan}) - Phase 2B-4's three
+     * new operations reuse the exact same single-artifact resolution/staging path
+     * {@code TERRAFORM_FMT_CHECK} already established in Phase 2B-3, rather than introducing a
+     * separate repository-checkout-root concept (see {@code docs/phase-2b4-controlled-init-validation.md}
+     * for why that reuse, not {@link RunnerWorkspaceManager#stageTerraformConfigDirectory}, is this
+     * phase's actual configuration staging model). */
+    private static boolean isTerraformConfigOperation(RunnerOperation operation) {
+        return operation == RunnerOperation.TERRAFORM_FMT_CHECK
+                || operation == RunnerOperation.TERRAFORM_INIT
+                || operation == RunnerOperation.TERRAFORM_VALIDATE
+                || operation == RunnerOperation.TERRAFORM_PROVIDERS_SCHEMA;
+    }
+
     private static <T> T require(T value, String name) {
         if (value == null) {
             throw new IllegalArgumentException(name + " is required");
@@ -253,7 +267,7 @@ public final class ControlledRunner {
         Path stagedPath;
         try {
             workspace = workspaceManager.createWorkspace(request.runnerRequestId());
-            stagedPath = request.requestedOperation() == RunnerOperation.TERRAFORM_FMT_CHECK
+            stagedPath = isTerraformConfigOperation(request.requestedOperation())
                     ? workspaceManager.stageTerraformConfigFile(workspace, observedSha256, stored.get().content())
                     : workspaceManager.stageArtifact(workspace, observedSha256, stored.get().content());
         } catch (RuntimeException e) {
@@ -274,6 +288,18 @@ public final class ControlledRunner {
 
         if (request.requestedOperation() == RunnerOperation.TERRAFORM_SHOW_PLAN_JSON) {
             return runTerraformShowPlanJson(request, startedAt, identity, observedSha256, approvalResult.reasonCode(), workspace, stagedPath);
+        }
+
+        if (request.requestedOperation() == RunnerOperation.TERRAFORM_INIT) {
+            return runTerraformInit(request, startedAt, identity, observedSha256, approvalResult.reasonCode(), workspace, stored.get().content());
+        }
+
+        if (request.requestedOperation() == RunnerOperation.TERRAFORM_VALIDATE) {
+            return runTerraformValidate(request, startedAt, identity, observedSha256, approvalResult.reasonCode(), workspace, stored.get().content());
+        }
+
+        if (request.requestedOperation() == RunnerOperation.TERRAFORM_PROVIDERS_SCHEMA) {
+            return runTerraformProvidersSchema(request, startedAt, identity, observedSha256, approvalResult.reasonCode(), workspace, stored.get().content());
         }
 
         // --- Context: runner-observed Terraform version / provider-lock hash, never the
@@ -357,6 +383,100 @@ public final class ControlledRunner {
         }
         TerraformProcessEvidence tfEvidence = terraformCoordinator.executeShowPlanJson(request, identity, workspace, stagedPlanPath, observedSha256);
         return fromTerraformEvidence(request, startedAt, identity, observedSha256, approvalReason, tfEvidence, workspace);
+    }
+
+    /** Phase 2B-4: {@code TERRAFORM_INIT} - the config artifact is staged as a {@code .tf} file
+     * exactly like {@code TERRAFORM_FMT_CHECK} before this is called; {@code configContent} is
+     * passed through so the coordinator can compute a configuration identity and run its pre-init
+     * source-policy scan without re-reading the staged file from disk. */
+    private PipelineOutcome runTerraformInit(RunnerRequest request, Instant startedAt, RunnerIdentity identity, String observedSha256,
+                                              ApprovalValidationReasonCode approvalReason, Path workspace, byte[] configContent) {
+        if (terraformCoordinator == null) {
+            RunnerEvidence evidence = evidenceOf(request, startedAt, clock.instant(), RunnerState.BLOCKED,
+                    List.of(RunnerReasonCode.TERRAFORM_OPERATION_NOT_ALLOWED), identity, observedSha256, approvalReason, null, null);
+            return new PipelineOutcome(evidence, workspace);
+        }
+        TerraformInitEvidence initEvidence = terraformCoordinator.executeInit(request, identity, workspace, configFilesFor(configContent));
+        return fromTerraformInitEvidence(request, startedAt, identity, observedSha256, approvalReason, initEvidence, workspace);
+    }
+
+    /** Phase 2B-4: {@code TERRAFORM_VALIDATE} - the coordinator internally runs the same controlled
+     * init sequence {@link #runTerraformInit} uses before validate itself is ever launched. */
+    private PipelineOutcome runTerraformValidate(RunnerRequest request, Instant startedAt, RunnerIdentity identity, String observedSha256,
+                                                  ApprovalValidationReasonCode approvalReason, Path workspace, byte[] configContent) {
+        if (terraformCoordinator == null) {
+            RunnerEvidence evidence = evidenceOf(request, startedAt, clock.instant(), RunnerState.BLOCKED,
+                    List.of(RunnerReasonCode.TERRAFORM_OPERATION_NOT_ALLOWED), identity, observedSha256, approvalReason, null, null);
+            return new PipelineOutcome(evidence, workspace);
+        }
+        TerraformValidateEvidence validateEvidence = terraformCoordinator.executeValidate(request, identity, workspace, configFilesFor(configContent));
+        return fromTerraformValidateEvidence(request, startedAt, identity, observedSha256, approvalReason, validateEvidence, workspace);
+    }
+
+    /** Phase 2B-4: {@code TERRAFORM_PROVIDERS_SCHEMA} - the coordinator internally runs the same
+     * controlled init sequence {@link #runTerraformInit} uses before providers-schema is launched. */
+    private PipelineOutcome runTerraformProvidersSchema(RunnerRequest request, Instant startedAt, RunnerIdentity identity, String observedSha256,
+                                                         ApprovalValidationReasonCode approvalReason, Path workspace, byte[] configContent) {
+        if (terraformCoordinator == null) {
+            RunnerEvidence evidence = evidenceOf(request, startedAt, clock.instant(), RunnerState.BLOCKED,
+                    List.of(RunnerReasonCode.TERRAFORM_OPERATION_NOT_ALLOWED), identity, observedSha256, approvalReason, null, null);
+            return new PipelineOutcome(evidence, workspace);
+        }
+        TerraformProviderSchemaEvidence schemaEvidence = terraformCoordinator.executeProvidersSchema(request, identity, workspace, configFilesFor(configContent));
+        return fromTerraformProviderSchemaEvidence(request, startedAt, identity, observedSha256, approvalReason, schemaEvidence, workspace);
+    }
+
+    /** Wraps the request's single resolved config-artifact blob into the
+     * {@link TerraformConfigIdentity.NamedConfigFile} shape the coordinator's Phase 2B-4 methods
+     * require. {@code SINGLE_ARTIFACT_CONFIG_FILE_NAME} is a fixed constant, never a caller/
+     * repository-supplied name - this runner's current request contract resolves exactly one
+     * pre-hashed artifact per request (the same single-artifact model {@code TERRAFORM_FMT_CHECK}
+     * already uses), so there is no real "original filename" to preserve yet. A future phase that
+     * wires {@link RunnerWorkspaceManager#stageTerraformConfigDirectory} in would supply the
+     * genuine repository-relative filenames instead - see {@code docs/phase-2b4-controlled-init-validation.md}
+     * §10. */
+    private static final String SINGLE_ARTIFACT_CONFIG_FILE_NAME = "config.tf";
+
+    private static List<TerraformConfigIdentity.NamedConfigFile> configFilesFor(byte[] content) {
+        return List.of(new TerraformConfigIdentity.NamedConfigFile(SINGLE_ARTIFACT_CONFIG_FILE_NAME, content));
+    }
+
+    private PipelineOutcome fromTerraformInitEvidence(RunnerRequest request, Instant startedAt, RunnerIdentity identity, String observedPlanSha256,
+                                                       ApprovalValidationReasonCode approvalReason, TerraformInitEvidence initEvidence, Path workspace) {
+        RunnerState finalState = initEvidence.succeeded() ? RunnerState.TERRAFORM_PROCESS_COMPLETED : RunnerState.BLOCKED;
+        RunnerEvidence evidence = new RunnerEvidence(
+                request.runnerRequestId(), identity == null ? null : identity.runnerId(), identity == null ? null : identity.runnerClass(),
+                identity == null ? Set.of() : identity.environmentScope(), request.requestedOperation(), request.repository(), request.commitSha(),
+                request.environment(), request.planArtifactId(), request.planSha256(), observedPlanSha256, request.terraformVersion(),
+                initEvidence.terraformVersionObserved(), request.providerLockHash(), null, request.approvalId(), approvalReason, finalState,
+                initEvidence.reasonCodes(), startedAt, initEvidence.completedAt(), null, initEvidence, null, null);
+        return new PipelineOutcome(evidence, workspace);
+    }
+
+    private PipelineOutcome fromTerraformValidateEvidence(RunnerRequest request, Instant startedAt, RunnerIdentity identity, String observedPlanSha256,
+                                                           ApprovalValidationReasonCode approvalReason, TerraformValidateEvidence validateEvidence, Path workspace) {
+        boolean succeeded = validateEvidence.processState() == TerraformProcessState.SUCCEEDED
+                || validateEvidence.processState() == TerraformProcessState.COMMAND_REPORTED_DIFFERENCE;
+        RunnerState finalState = succeeded ? RunnerState.TERRAFORM_PROCESS_COMPLETED : RunnerState.BLOCKED;
+        RunnerEvidence evidence = new RunnerEvidence(
+                request.runnerRequestId(), identity == null ? null : identity.runnerId(), identity == null ? null : identity.runnerClass(),
+                identity == null ? Set.of() : identity.environmentScope(), request.requestedOperation(), request.repository(), request.commitSha(),
+                request.environment(), request.planArtifactId(), request.planSha256(), observedPlanSha256, request.terraformVersion(),
+                validateEvidence.initEvidence().terraformVersionObserved(), request.providerLockHash(), null, request.approvalId(), approvalReason,
+                finalState, validateEvidence.reasonCodes(), startedAt, validateEvidence.completedAt(), null, null, validateEvidence, null);
+        return new PipelineOutcome(evidence, workspace);
+    }
+
+    private PipelineOutcome fromTerraformProviderSchemaEvidence(RunnerRequest request, Instant startedAt, RunnerIdentity identity, String observedPlanSha256,
+                                                                 ApprovalValidationReasonCode approvalReason, TerraformProviderSchemaEvidence schemaEvidence, Path workspace) {
+        RunnerState finalState = schemaEvidence.processState() == TerraformProcessState.SUCCEEDED ? RunnerState.TERRAFORM_PROCESS_COMPLETED : RunnerState.BLOCKED;
+        RunnerEvidence evidence = new RunnerEvidence(
+                request.runnerRequestId(), identity == null ? null : identity.runnerId(), identity == null ? null : identity.runnerClass(),
+                identity == null ? Set.of() : identity.environmentScope(), request.requestedOperation(), request.repository(), request.commitSha(),
+                request.environment(), request.planArtifactId(), request.planSha256(), observedPlanSha256, request.terraformVersion(),
+                schemaEvidence.terraformVersionObserved(), request.providerLockHash(), null, request.approvalId(), approvalReason,
+                finalState, schemaEvidence.reasonCodes(), startedAt, schemaEvidence.completedAt(), null, null, null, schemaEvidence);
+        return new PipelineOutcome(evidence, workspace);
     }
 
     /** Maps a {@link TerraformProcessEvidence} into the enclosing {@link RunnerEvidence}/

@@ -40,7 +40,10 @@ public record RunnerEvidence(
         List<RunnerReasonCode> reasonCodes,
         Instant startedAt,
         Instant completedAt,
-        TerraformProcessEvidence terraformProcessEvidence
+        TerraformProcessEvidence terraformProcessEvidence,
+        TerraformInitEvidence terraformInitEvidence,
+        TerraformValidateEvidence terraformValidateEvidence,
+        TerraformProviderSchemaEvidence terraformProviderSchemaEvidence
 ) {
     public RunnerEvidence {
         reasonCodes = reasonCodes == null ? List.of() : List.copyOf(reasonCodes);
@@ -50,6 +53,28 @@ public record RunnerEvidence(
         // pre-2B-3 operation (and any 2B-3 attempt that BLOCKED before a Terraform process was ever
         // attempted) carries null here, same as observedPlanSha256 etc. being null before their
         // corresponding check ever ran.
+        //
+        // Phase 2B-4 adds three more, same discipline: terraformInitEvidence is non-null only for
+        // TERRAFORM_INIT; terraformValidateEvidence/terraformProviderSchemaEvidence are non-null
+        // only for TERRAFORM_VALIDATE/TERRAFORM_PROVIDERS_SCHEMA respectively (each of which
+        // embeds its own internally-run init attempt's TerraformInitEvidence, so it is never
+        // duplicated into this record's own terraformInitEvidence field as well). Exactly one of
+        // these four Terraform evidence fields is ever non-null for a given RunnerEvidence.
+    }
+
+    /** Convenience constructor for every operation before Phase 2B-4 - the three new evidence
+     * fields are always null. */
+    public RunnerEvidence(
+            String runnerRequestId, String runnerId, String runnerClass, Set<String> runnerEnvironmentScope, RunnerOperation operation,
+            String repository, String commitSha, String environment, String planArtifactId, String expectedPlanSha256, String observedPlanSha256,
+            String terraformVersionExpected, String terraformVersionObserved, String providerLockHashExpected, String providerLockHashObserved,
+            String approvalId, ApprovalValidationReasonCode approvalValidationResult, RunnerState finalState, List<RunnerReasonCode> reasonCodes,
+            Instant startedAt, Instant completedAt, TerraformProcessEvidence terraformProcessEvidence
+    ) {
+        this(runnerRequestId, runnerId, runnerClass, runnerEnvironmentScope, operation, repository, commitSha, environment, planArtifactId,
+                expectedPlanSha256, observedPlanSha256, terraformVersionExpected, terraformVersionObserved, providerLockHashExpected,
+                providerLockHashObserved, approvalId, approvalValidationResult, finalState, reasonCodes, startedAt, completedAt,
+                terraformProcessEvidence, null, null, null);
     }
 
     public boolean isReadyForFutureExecution() {

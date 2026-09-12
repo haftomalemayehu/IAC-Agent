@@ -214,6 +214,30 @@ public final class RunnerWorkspaceManager {
         return TerraformConfigStagingResult.success(stagedFiles);
     }
 
+    /**
+     * Phase 2B-4: creates a runner-owned Terraform CLI config file plus its plugin cache directory
+     * inside {@code workspace}, so {@code TF_CLI_CONFIG_FILE}/{@code TF_PLUGIN_CACHE_DIR} (see
+     * {@link TerraformInitProcessEnvironmentPolicy}) always point at something this trusted code
+     * actually created, never at a caller/repository-influenced path. The generated config is
+     * deliberately minimal - a plugin cache directory declaration and
+     * {@code disable_checkpoint = true} - never a {@code credentials}/{@code provider_installation}
+     * block naming any host or path outside the workspace.
+     */
+    public Path prepareTerraformCliConfig(Path workspace) {
+        try {
+            Path pluginCache = workspace.resolve("plugin-cache");
+            Files.createDirectories(pluginCache);
+            requireUnderRoot(pluginCache.toRealPath(), rootDirectory.toRealPath());
+            Path cliConfig = workspace.resolve("terraform.rc");
+            String escapedPluginCachePath = pluginCache.toString().replace("\\", "\\\\").replace("\"", "\\\"");
+            String content = "plugin_cache_dir = \"" + escapedPluginCachePath + "\"\ndisable_checkpoint = true\n";
+            Files.writeString(cliConfig, content);
+            return cliConfig;
+        } catch (IOException e) {
+            throw new RunnerWorkspaceException("failed to prepare Terraform CLI config in workspace " + workspace, e);
+        }
+    }
+
     private static final class UnsafeConfigSourceException extends IOException {
     }
 

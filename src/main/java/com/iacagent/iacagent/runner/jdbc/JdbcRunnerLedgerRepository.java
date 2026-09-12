@@ -126,7 +126,8 @@ public final class JdbcRunnerLedgerRepository implements RunnerLedgerRepository 
                     runner_id = ?, runner_class = ?, runner_environment_scope = ?,
                     observed_plan_sha256 = ?, terraform_version_observed = ?, provider_lock_hash_observed = ?,
                     approval_validation_result = ?, final_state = ?, reason_codes = ?, completed_at = ?,
-                    terraform_process_evidence = ?,
+                    terraform_process_evidence = ?, terraform_init_evidence = ?, terraform_validate_evidence = ?,
+                    terraform_provider_schema_evidence = ?,
                     version = version + 1, updated_at = ?
                 WHERE runner_request_id = ? AND claim_state = 'CLAIMED'
                 """;
@@ -145,6 +146,9 @@ public final class JdbcRunnerLedgerRepository implements RunnerLedgerRepository 
             ps.setString(i++, joinReasonCodesOrNull(evidence.reasonCodes()));
             setInstant(ps, i++, evidence.completedAt());
             ps.setString(i++, TerraformProcessEvidenceJson.toJson(evidence.terraformProcessEvidence()));
+            ps.setString(i++, TerraformInitEvidenceJson.toJson(evidence.terraformInitEvidence()));
+            ps.setString(i++, TerraformValidateEvidenceJson.toJson(evidence.terraformValidateEvidence()));
+            ps.setString(i++, TerraformProviderSchemaEvidenceJson.toJson(evidence.terraformProviderSchemaEvidence()));
             setInstant(ps, i++, evidence.completedAt());
             ps.setString(i, evidence.runnerRequestId());
             updated = ps.executeUpdate();
@@ -260,7 +264,10 @@ public final class JdbcRunnerLedgerRepository implements RunnerLedgerRepository 
                 reasonCodes,
                 readInstant(rs, "started_at"),
                 readInstant(rs, "completed_at"),
-                TerraformProcessEvidenceJson.fromJson(rs.getString("terraform_process_evidence"))
+                TerraformProcessEvidenceJson.fromJson(rs.getString("terraform_process_evidence")),
+                TerraformInitEvidenceJson.fromJson(TerraformInitEvidenceJson.parseTree(rs.getString("terraform_init_evidence"))),
+                TerraformValidateEvidenceJson.fromJson(rs.getString("terraform_validate_evidence")),
+                TerraformProviderSchemaEvidenceJson.fromJson(rs.getString("terraform_provider_schema_evidence"))
         );
     }
 

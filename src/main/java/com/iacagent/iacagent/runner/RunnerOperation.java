@@ -34,5 +34,21 @@ public enum RunnerOperation {
      * artifact only - never an arbitrary or caller-supplied path. Re-verifies the staged plan's
      * SHA-256 immediately before launching the process (a final TOCTOU check on top of the
      * artifact verification already performed earlier in the pipeline). */
-    TERRAFORM_SHOW_PLAN_JSON
+    TERRAFORM_SHOW_PLAN_JSON,
+    /** Phase 2B-4: stages the request's bound Terraform configuration content (same resolution
+     * path as {@link #TERRAFORM_FMT_CHECK}) and runs a policy-governed {@code terraform init
+     * -backend=false -input=false -no-color -lockfile=readonly} against it. Still no {@code plan}/
+     * {@code apply}/backend/state capability of any kind - see
+     * {@code docs/phase-2b4-controlled-init-validation.md}. */
+    TERRAFORM_INIT,
+    /** Phase 2B-4: internally runs the same controlled {@code init} sequence as
+     * {@link #TERRAFORM_INIT} against the staged configuration, then - only if that succeeds -
+     * runs {@code terraform validate -json}. Never runs validate against a configuration that
+     * was not just successfully, freshly initialized in this same call. */
+    TERRAFORM_VALIDATE,
+    /** Phase 2B-4: internally runs the same controlled {@code init} sequence as
+     * {@link #TERRAFORM_INIT} against the staged configuration, then - only if that succeeds -
+     * runs {@code terraform providers schema -json}. Never runs against a configuration that was
+     * not just successfully, freshly initialized in this same call. */
+    TERRAFORM_PROVIDERS_SCHEMA
 }

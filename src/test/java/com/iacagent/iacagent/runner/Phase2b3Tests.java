@@ -111,11 +111,15 @@ class Phase2b3Tests {
     // ===================== 28: command surface structural tests =====================
 
     @Test
-    void onlyTheThreeAllowedControlledTerraformOperationsExist() {
+    void onlyTheSixAllowedControlledTerraformOperationsExist() {
         Set<String> names = Arrays.stream(ControlledTerraformOperation.values()).map(Enum::name).collect(Collectors.toSet());
-        assertEquals(Set.of("TERRAFORM_VERSION", "TERRAFORM_FMT_CHECK", "TERRAFORM_SHOW_PLAN_JSON"), names);
-        for (String forbidden : List.of("INIT", "VALIDATE", "PLAN", "APPLY", "DESTROY", "IMPORT",
-                "STATE", "FORCE_UNLOCK", "TAINT", "UNTAINT", "REFRESH", "WORKSPACE", "PROVIDERS_SCHEMA", "GET")) {
+        // Phase 2B-4 added TERRAFORM_INIT/TERRAFORM_VALIDATE/TERRAFORM_PROVIDERS_SCHEMA under a
+        // policy-governed trust boundary - see docs/phase-2b4-controlled-init-validation.md. PLAN
+        // and APPLY remain deliberately absent.
+        assertEquals(Set.of("TERRAFORM_VERSION", "TERRAFORM_FMT_CHECK", "TERRAFORM_SHOW_PLAN_JSON",
+                "TERRAFORM_INIT", "TERRAFORM_VALIDATE", "TERRAFORM_PROVIDERS_SCHEMA"), names);
+        for (String forbidden : List.of("PLAN", "APPLY", "DESTROY", "IMPORT",
+                "STATE", "FORCE_UNLOCK", "TAINT", "UNTAINT", "REFRESH", "WORKSPACE", "GET")) {
             assertFalse(names.contains(forbidden), forbidden + " must not be representable");
         }
     }
@@ -884,14 +888,22 @@ class Phase2b3Tests {
         if (!Files.isDirectory(sourceDir)) {
             return;
         }
+        // Phase 2B-4 amendment: comments are stripped before scanning, same lesson already recorded
+        // for Phase 2B-2's System.getenv() scan and Phase 2B-3's LegacyExecutionSurfaceTests - this
+        // phase's own extensive javadoc explains "terraform init"/"terraform validate" by name in
+        // prose, which would otherwise trip this literal scan even though no actual argv-building
+        // code ever concatenates those two words (TerraformCommandFactory always builds "init" and
+        // "validate" as SEPARATE List.of(...) elements from the executable path, never joined with
+        // "terraform " into one string) - the forbidden two-word phrases below remain meaningful for
+        // any future code that DID naively concatenate a command line as a single string.
         List<String> forbiddenEverywhere = List.of(
                 "Runtime.getRuntime().exec", "Runtime.exec", "/bin/sh", "\"bash\"", "bash -c", "cmd.exe", "powershell",
-                "terraform init", "terraform validate", "terraform plan", "terraform apply", "terraform destroy",
+                "terraform plan", "terraform apply", "terraform destroy",
                 "terraform import", "terraform state", "terraform force-unlock", "terraform taint", "terraform untaint",
                 "terraform refresh", "terraform workspace");
         try (var files = Files.walk(sourceDir)) {
             for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
-                String content = Files.readString(file);
+                String content = stripJavaComments(Files.readString(file));
                 boolean isTheProcessBoundary = file.getFileName().toString().equals("ControlledTerraformProcess.java");
                 if (!isTheProcessBoundary) {
                     assertFalse(content.contains("ProcessBuilder"), file + " must not reference ProcessBuilder");
@@ -901,6 +913,11 @@ class Phase2b3Tests {
                 }
             }
         }
+    }
+
+    private static String stripJavaComments(String source) {
+        String noBlockComments = source.replaceAll("(?s)/\\*.*?\\*/", "");
+        return noBlockComments.replaceAll("(?m)//.*$", "");
     }
 
     // ===================== ControlledRunner integration (no approval/ledger bypass) =====================

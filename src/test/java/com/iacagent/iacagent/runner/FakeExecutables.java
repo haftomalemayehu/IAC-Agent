@@ -139,6 +139,36 @@ final class FakeExecutables {
         return write(dir, name, script.toString());
     }
 
+    /**
+     * A fake "terraform" that dispatches on {@code $1}/{@code $2} across the full Phase 2B-4
+     * operation set: {@code version}, {@code init}, {@code validate}, and {@code providers schema} -
+     * each given its own caller-supplied script body (which must include its own {@code exit N}).
+     * Any other invocation exits 1. Needed because {@code TERRAFORM_INIT}/{@code TERRAFORM_VALIDATE}/
+     * {@code TERRAFORM_PROVIDERS_SCHEMA} must pass the same version-attestation gate as
+     * {@code TERRAFORM_FMT_CHECK}/{@code TERRAFORM_SHOW_PLAN_JSON} before their own requested
+     * command ever runs, and validate/providers-schema additionally run a real internal
+     * {@code init} step first.
+     */
+    static Path terraformInitStub(Path dir, String name, String reportedVersion,
+                                   String initScriptBody, String validateScriptBody, String providersSchemaScriptBody) throws IOException {
+        String script = "#!/bin/sh\n"
+                + "if [ \"$1\" = \"version\" ]; then\n"
+                + "  echo '{\"terraform_version\":\"" + reportedVersion + "\"}'\n"
+                + "  exit 0\n"
+                + "fi\n"
+                + "if [ \"$1\" = \"init\" ]; then\n"
+                + initScriptBody + "\n"
+                + "fi\n"
+                + "if [ \"$1\" = \"validate\" ]; then\n"
+                + validateScriptBody + "\n"
+                + "fi\n"
+                + "if [ \"$1\" = \"providers\" ] && [ \"$2\" = \"schema\" ]; then\n"
+                + providersSchemaScriptBody + "\n"
+                + "fi\n"
+                + "exit 1\n";
+        return write(dir, name, script);
+    }
+
     static String sha256Hex(Path file) throws IOException {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");

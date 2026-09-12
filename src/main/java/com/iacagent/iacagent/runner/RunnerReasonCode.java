@@ -124,5 +124,94 @@ public enum RunnerReasonCode {
      * one file's size, or the aggregate size of all staged files, exceeded the configured bound -
      * repository content must not be given an unbounded local resource-exhaustion path via
      * {@code fmt -recursive}. */
-    TERRAFORM_CONFIG_SIZE_LIMIT_EXCEEDED
+    TERRAFORM_CONFIG_SIZE_LIMIT_EXCEEDED,
+
+    // ---- Phase 2B-4: controlled provider/backend initialization + validation ----
+
+    /** {@code TERRAFORM_INIT}/{@code TERRAFORM_VALIDATE}/{@code TERRAFORM_PROVIDERS_SCHEMA} was
+     * requested against a runner that has no {@link ControlledTerraformOperationCoordinator}
+     * initialization support wired in - the same "not wired, not a bypass" meaning
+     * {@link #TERRAFORM_OPERATION_NOT_ALLOWED} already carries for the Phase 2B-3 operations. */
+    TERRAFORM_INIT_NOT_ALLOWED,
+    /** {@code terraform init} launched but exited with a code this operation does not treat as
+     * success - a genuine init failure (e.g. a malformed configuration), not a policy rejection
+     * that blocked before launch (those get their own specific reason codes below). */
+    TERRAFORM_INIT_FAILED,
+    /** The configured {@link TerraformBackendMode} is not {@link TerraformBackendMode#LOCAL_ONLY} -
+     * the only mode this phase implements. Blocks before {@code init} is ever launched. */
+    TERRAFORM_BACKEND_MODE_UNSAFE,
+    /** {@link TerraformConfigSourceExtractor} deterministically extracted a {@code required_providers}
+     * source not allowed by the configured {@link TerraformSourcePolicy}. Blocks before {@code init}
+     * is ever launched. */
+    TERRAFORM_PROVIDER_SOURCE_UNTRUSTED,
+    /** {@link TerraformConfigSourceExtractor} deterministically extracted a {@code module} source
+     * not allowed by the configured {@link TerraformSourcePolicy}. Blocks before {@code init} is
+     * ever launched. */
+    TERRAFORM_MODULE_SOURCE_UNTRUSTED,
+    /** {@link TerraformConfigSourceExtractor} (via {@link TerraformNativeSourceExtractor}/
+     * {@link TerraformJsonSourceExtractor}) could not deterministically extract a {@code
+     * required_providers}/{@code module} source declaration from the staged configuration -
+     * malformed/unterminated syntax, an unrecognized configuration file extension, or a
+     * {@code source} value that is not an immediate string literal (a reference, interpolation,
+     * heredoc, or function call). Fails closed BEFORE {@code init} is ever launched, exactly like a
+     * recognized-but-disallowed source - "could not understand this configuration's sources" must
+     * never be treated as "this configuration declares no sources." */
+    TERRAFORM_SOURCE_EXTRACTION_FAILED,
+    /** The staged root module references a provider (via a {@code resource}/{@code data} block's
+     * type prefix, or a {@code provider} configuration block) with no corresponding explicit
+     * {@code terraform.required_providers} entry. Phase 2B-4 never relies on Terraform's own
+     * implicit {@code registry.terraform.io/hashicorp/<local-name>} fallback resolution for a
+     * provider the staged configuration itself never declared - every provider dependency
+     * {@code init} could resolve must already appear, by name, in the policy-checked manifest.
+     * Blocks before {@code init} is ever launched. The built-in {@code terraform} provider (e.g.
+     * {@code terraform_data}) is exempt - it ships inside the Terraform binary itself, requires no
+     * declaration in real Terraform, and cannot be redirected to an arbitrary source. */
+    TERRAFORM_PROVIDER_REQUIREMENT_IMPLICIT,
+    /** The staged root module contains at least one {@code module} block. Phase 2B-4 does not yet
+     * recursively stage, parse, or policy-validate a module's own downloaded contents - a module
+     * source passing {@link TerraformSourcePolicy} only proves the DIRECT reference is trusted, not
+     * that everything the module itself might declare (further modules, further providers) is. Until
+     * a later phase implements a recursively-resolved, policy-validated module dependency graph, ANY
+     * module block blocks {@code init} unconditionally - regardless of the module's source or
+     * whether {@link TerraformSourcePolicy} would otherwise allow it. Module sources are still
+     * parsed/canonicalized into evidence (see {@link TerraformInitEvidence#moduleSourcesRequested()})
+     * for forward compatibility with that later phase; they are simply not execution-eligible yet. */
+    TERRAFORM_MODULE_DEPENDENCY_GRAPH_UNRESOLVED,
+    /** The configuration declares at least one provider source, {@code terraform init} reported
+     * success, but no {@code .terraform.lock.hcl} exists afterward - a suspicious combination this
+     * phase treats as fail-closed rather than assuming success is trustworthy regardless. */
+    TERRAFORM_LOCKFILE_MISSING,
+    /** A {@code .terraform.lock.hcl} that existed before {@code init} has different content
+     * afterward - unexpected given {@code -lockfile=readonly} was passed. Always blocks, even if
+     * the process itself exited 0. */
+    TERRAFORM_LOCKFILE_CHANGED,
+    /** The path {@code .terraform.lock.hcl} resolves to is not a genuine regular file (e.g. a
+     * symlink) either before or after {@code init} - rejected outright, never read as a trusted
+     * lockfile. */
+    TERRAFORM_LOCKFILE_INVALID,
+    /** {@code terraform init} did not complete successfully for this exact configuration identity
+     * (or was itself blocked by policy) - {@code TERRAFORM_VALIDATE}/{@code TERRAFORM_PROVIDERS_SCHEMA}
+     * must not run without it, and this is the reason code recorded when they don't. */
+    TERRAFORM_INIT_REQUIRED,
+    /** {@code terraform validate -json} launched but exited with a code this operation does not
+     * treat as success. */
+    TERRAFORM_VALIDATE_FAILED,
+    /** {@code terraform validate -json}'s stdout could not be parsed as the expected structured
+     * output (missing/malformed {@code valid}/{@code diagnostics} fields). */
+    TERRAFORM_VALIDATE_OUTPUT_INVALID,
+    /** {@code terraform providers schema -json} launched but exited with a code this operation
+     * does not treat as success. */
+    TERRAFORM_PROVIDER_SCHEMA_FAILED,
+    /** {@code terraform providers schema -json}'s stdout could not be parsed as valid JSON at all. */
+    TERRAFORM_PROVIDER_SCHEMA_OUTPUT_INVALID,
+    /** A configuration-identity binding no longer matches - reserved for a future cross-request
+     * evidence-reuse path; Phase 2B-4 always computes {@code configSha256} fresh within the same
+     * single {@link ControlledRunner#execute} call it is used in, so this cannot currently be
+     * observed, but the reason code exists so evidence consumers have a name for it the moment
+     * cross-request reuse is ever introduced. */
+    TERRAFORM_CONFIG_IDENTITY_MISMATCH,
+    /** Reserved: {@link TerraformNetworkRequirement} is a policy/evidence value only - nothing in
+     * this package currently enforces network access at the OS level (Gate D), so this reason code
+     * is defined but never produced by Phase 2B-4 itself. */
+    TERRAFORM_NETWORK_POLICY_VIOLATION
 }
