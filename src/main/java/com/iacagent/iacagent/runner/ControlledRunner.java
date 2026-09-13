@@ -102,7 +102,8 @@ public final class ControlledRunner {
         return operation == RunnerOperation.TERRAFORM_FMT_CHECK
                 || operation == RunnerOperation.TERRAFORM_INIT
                 || operation == RunnerOperation.TERRAFORM_VALIDATE
-                || operation == RunnerOperation.TERRAFORM_PROVIDERS_SCHEMA;
+                || operation == RunnerOperation.TERRAFORM_PROVIDERS_SCHEMA
+                || operation == RunnerOperation.TERRAFORM_PLAN;
     }
 
     private static <T> T require(T value, String name) {
@@ -302,6 +303,10 @@ public final class ControlledRunner {
             return runTerraformProvidersSchema(request, startedAt, identity, observedSha256, approvalResult.reasonCode(), workspace, stored.get().content());
         }
 
+        if (request.requestedOperation() == RunnerOperation.TERRAFORM_PLAN) {
+            return runTerraformPlan(request, startedAt, identity, observedSha256, approvalResult.reasonCode(), workspace, stored.get().content());
+        }
+
         // --- Context: runner-observed Terraform version / provider-lock hash, never the
         // request's own claim alone. PREPARE_EXECUTION only. ---
         String observedTerraformVersion = toolchainContext.observedTerraformVersion();
@@ -426,6 +431,20 @@ public final class ControlledRunner {
         return fromTerraformProviderSchemaEvidence(request, startedAt, identity, observedSha256, approvalReason, schemaEvidence, workspace);
     }
 
+    /** Phase 2B-5: {@code TERRAFORM_PLAN} - produces a real, saved plan artifact against a trusted,
+     * control-plane-resolved backend/state target. Still no infrastructure/state mutation: a plan
+     * reads state and may read provider APIs, but never writes state or applies anything. */
+    private PipelineOutcome runTerraformPlan(RunnerRequest request, Instant startedAt, RunnerIdentity identity, String observedSha256,
+                                              ApprovalValidationReasonCode approvalReason, Path workspace, byte[] configContent) {
+        if (terraformCoordinator == null) {
+            RunnerEvidence evidence = evidenceOf(request, startedAt, clock.instant(), RunnerState.BLOCKED,
+                    List.of(RunnerReasonCode.TERRAFORM_OPERATION_NOT_ALLOWED), identity, observedSha256, approvalReason, null, null);
+            return new PipelineOutcome(evidence, workspace);
+        }
+        TerraformPlanEvidence planEvidence = terraformCoordinator.executePlan(request, identity, workspace, configFilesFor(configContent));
+        return fromTerraformPlanEvidence(request, startedAt, identity, observedSha256, approvalReason, planEvidence, workspace);
+    }
+
     /** Wraps the request's single resolved config-artifact blob into the
      * {@link TerraformConfigIdentity.NamedConfigFile} shape the coordinator's Phase 2B-4 methods
      * require. {@code SINGLE_ARTIFACT_CONFIG_FILE_NAME} is a fixed constant, never a caller/
@@ -476,6 +495,18 @@ public final class ControlledRunner {
                 request.environment(), request.planArtifactId(), request.planSha256(), observedPlanSha256, request.terraformVersion(),
                 schemaEvidence.terraformVersionObserved(), request.providerLockHash(), null, request.approvalId(), approvalReason,
                 finalState, schemaEvidence.reasonCodes(), startedAt, schemaEvidence.completedAt(), null, null, null, schemaEvidence);
+        return new PipelineOutcome(evidence, workspace);
+    }
+
+    private PipelineOutcome fromTerraformPlanEvidence(RunnerRequest request, Instant startedAt, RunnerIdentity identity, String observedPlanSha256,
+                                                       ApprovalValidationReasonCode approvalReason, TerraformPlanEvidence planEvidence, Path workspace) {
+        RunnerState finalState = planEvidence.succeeded() ? RunnerState.TERRAFORM_PROCESS_COMPLETED : RunnerState.BLOCKED;
+        RunnerEvidence evidence = new RunnerEvidence(
+                request.runnerRequestId(), identity == null ? null : identity.runnerId(), identity == null ? null : identity.runnerClass(),
+                identity == null ? Set.of() : identity.environmentScope(), request.requestedOperation(), request.repository(), request.commitSha(),
+                request.environment(), request.planArtifactId(), request.planSha256(), observedPlanSha256, request.terraformVersion(),
+                planEvidence.terraformVersionObserved(), request.providerLockHash(), null, request.approvalId(), approvalReason,
+                finalState, planEvidence.reasonCodes(), startedAt, planEvidence.completedAt(), null, null, null, null, planEvidence);
         return new PipelineOutcome(evidence, workspace);
     }
 

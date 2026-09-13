@@ -127,7 +127,7 @@ public final class JdbcRunnerLedgerRepository implements RunnerLedgerRepository 
                     observed_plan_sha256 = ?, terraform_version_observed = ?, provider_lock_hash_observed = ?,
                     approval_validation_result = ?, final_state = ?, reason_codes = ?, completed_at = ?,
                     terraform_process_evidence = ?, terraform_init_evidence = ?, terraform_validate_evidence = ?,
-                    terraform_provider_schema_evidence = ?,
+                    terraform_provider_schema_evidence = ?, terraform_plan_evidence = ?,
                     version = version + 1, updated_at = ?
                 WHERE runner_request_id = ? AND claim_state = 'CLAIMED'
                 """;
@@ -149,6 +149,7 @@ public final class JdbcRunnerLedgerRepository implements RunnerLedgerRepository 
             ps.setString(i++, TerraformInitEvidenceJson.toJson(evidence.terraformInitEvidence()));
             ps.setString(i++, TerraformValidateEvidenceJson.toJson(evidence.terraformValidateEvidence()));
             ps.setString(i++, TerraformProviderSchemaEvidenceJson.toJson(evidence.terraformProviderSchemaEvidence()));
+            ps.setString(i++, TerraformPlanEvidenceJson.toJson(evidence.terraformPlanEvidence()));
             setInstant(ps, i++, evidence.completedAt());
             ps.setString(i, evidence.runnerRequestId());
             updated = ps.executeUpdate();
@@ -267,7 +268,8 @@ public final class JdbcRunnerLedgerRepository implements RunnerLedgerRepository 
                 TerraformProcessEvidenceJson.fromJson(rs.getString("terraform_process_evidence")),
                 TerraformInitEvidenceJson.fromJson(TerraformInitEvidenceJson.parseTree(rs.getString("terraform_init_evidence"))),
                 TerraformValidateEvidenceJson.fromJson(rs.getString("terraform_validate_evidence")),
-                TerraformProviderSchemaEvidenceJson.fromJson(rs.getString("terraform_provider_schema_evidence"))
+                TerraformProviderSchemaEvidenceJson.fromJson(rs.getString("terraform_provider_schema_evidence")),
+                TerraformPlanEvidenceJson.fromJson(rs.getString("terraform_plan_evidence"))
         );
     }
 

@@ -111,14 +111,15 @@ class Phase2b3Tests {
     // ===================== 28: command surface structural tests =====================
 
     @Test
-    void onlyTheSixAllowedControlledTerraformOperationsExist() {
+    void onlyTheSevenAllowedControlledTerraformOperationsExist() {
         Set<String> names = Arrays.stream(ControlledTerraformOperation.values()).map(Enum::name).collect(Collectors.toSet());
         // Phase 2B-4 added TERRAFORM_INIT/TERRAFORM_VALIDATE/TERRAFORM_PROVIDERS_SCHEMA under a
-        // policy-governed trust boundary - see docs/phase-2b4-controlled-init-validation.md. PLAN
-        // and APPLY remain deliberately absent.
+        // policy-governed trust boundary - see docs/phase-2b4-controlled-init-validation.md.
+        // Phase 2B-5 added TERRAFORM_PLAN (a real, mutation-free saved-plan artifact) - see
+        // docs/phase-2b5-controlled-plan-state-read.md. APPLY remains deliberately absent.
         assertEquals(Set.of("TERRAFORM_VERSION", "TERRAFORM_FMT_CHECK", "TERRAFORM_SHOW_PLAN_JSON",
-                "TERRAFORM_INIT", "TERRAFORM_VALIDATE", "TERRAFORM_PROVIDERS_SCHEMA"), names);
-        for (String forbidden : List.of("PLAN", "APPLY", "DESTROY", "IMPORT",
+                "TERRAFORM_INIT", "TERRAFORM_VALIDATE", "TERRAFORM_PROVIDERS_SCHEMA", "TERRAFORM_PLAN"), names);
+        for (String forbidden : List.of("APPLY", "DESTROY", "IMPORT",
                 "STATE", "FORCE_UNLOCK", "TAINT", "UNTAINT", "REFRESH", "WORKSPACE", "GET")) {
             assertFalse(names.contains(forbidden), forbidden + " must not be representable");
         }

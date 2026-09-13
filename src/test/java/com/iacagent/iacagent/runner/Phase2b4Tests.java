@@ -150,13 +150,15 @@ class Phase2b4Tests {
     }
 
     @Test
-    void terraformCommandFactoryBuildsExactlyTheSixAuthorizedCommandsAndNothingElse() {
+    void terraformCommandFactoryBuildsExactlyTheAuthorizedCommandsAndNothingElse() {
+        // Phase 2B-5 added initForPlanCommand/planCommand alongside the six Phase 2B-3/2B-4 methods -
+        // see Phase2b5Tests for the PLAN-specific argv/structural coverage.
         Set<String> commandMethodNames = java.util.Arrays.stream(TerraformCommandFactory.class.getDeclaredMethods())
                 .filter(m -> java.lang.reflect.Modifier.isPublic(m.getModifiers()))
                 .map(java.lang.reflect.Method::getName)
                 .collect(java.util.stream.Collectors.toSet());
-        assertEquals(Set.of("versionCommand", "fmtCheckCommand", "showPlanJsonCommand", "initCommand", "validateCommand", "providersSchemaCommand"),
-                commandMethodNames);
+        assertEquals(Set.of("versionCommand", "fmtCheckCommand", "showPlanJsonCommand", "initCommand", "validateCommand", "providersSchemaCommand",
+                "initForPlanCommand", "planCommand"), commandMethodNames);
     }
 
     @Test

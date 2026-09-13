@@ -445,11 +445,14 @@ class Phase2b1Tests {
         // Phase 2B-4 added TERRAFORM_INIT/TERRAFORM_VALIDATE/TERRAFORM_PROVIDERS_SCHEMA under a
         // policy-governed provider/module/backend trust boundary - still no PLAN/APPLY - see
         // docs/phase-2b4-controlled-init-validation.md.
+        // Phase 2B-5 added TERRAFORM_PLAN - a real, mutation-free saved-plan artifact against a
+        // trusted, control-plane-resolved backend/state target - still no APPLY - see
+        // docs/phase-2b5-controlled-plan-state-read.md.
         assertEquals(Set.of("VERIFY_ARTIFACT", "VERIFY_CONTEXT", "PREPARE_EXECUTION",
                 "TERRAFORM_VERSION", "TERRAFORM_FMT_CHECK", "TERRAFORM_SHOW_PLAN_JSON",
-                "TERRAFORM_INIT", "TERRAFORM_VALIDATE", "TERRAFORM_PROVIDERS_SCHEMA"), operationNames);
+                "TERRAFORM_INIT", "TERRAFORM_VALIDATE", "TERRAFORM_PROVIDERS_SCHEMA", "TERRAFORM_PLAN"), operationNames);
         for (String forbidden : List.of("APPLY", "DESTROY", "IMPORT", "STATE_RM", "STATE_MV", "FORCE_UNLOCK", "SHELL", "EXECUTE",
-                "PLAN", "REFRESH", "TAINT", "UNTAINT", "WORKSPACE")) {
+                "REFRESH", "TAINT", "UNTAINT", "WORKSPACE")) {
             assertFalse(operationNames.contains(forbidden), forbidden + " must not be a representable RunnerOperation");
         }
     }

@@ -32,5 +32,11 @@ public enum ControlledTerraformOperation {
     TERRAFORM_VALIDATE,
     /** {@code terraform providers schema -json}. Always preceded, within the same coordinator
      * call, by a successful {@link #TERRAFORM_INIT} against the identical staged configuration. */
-    TERRAFORM_PROVIDERS_SCHEMA
+    TERRAFORM_PROVIDERS_SCHEMA,
+    /** {@code terraform plan -out=<runner-owned-path> -input=false -no-color -detailed-exitcode}.
+     * Phase 2B-5's one new capability - produces a real, saved plan artifact against a trusted,
+     * control-plane-resolved backend/state target. Still mutation-free: a plan reads state and may
+     * read provider APIs, but never writes state or infrastructure. See
+     * {@code docs/phase-2b5-controlled-plan-state-read.md}. */
+    TERRAFORM_PLAN
 }

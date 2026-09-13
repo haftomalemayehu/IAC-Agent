@@ -11,9 +11,16 @@ import java.time.Instant;
  * normal exit, with {@code exitCode} populated, left for the caller to interpret).
  *
  * <p>{@code stdout} carries the actual bounded bytes captured (needed by the caller to parse
- * structured output); stderr is deliberately NOT carried as raw bytes here - only its size and hash
- * - per the Phase 2B-3 design doc's caution about not persisting arbitrary process/tool output that
- * could someday contain sensitive content.
+ * structured output). {@code stderr} (Phase 2B-5 security amendment) likewise carries the actual
+ * bounded bytes captured - added specifically so trusted, deterministic code inside this package
+ * (never an LLM, never persisted, never surfaced in an exception message) can transiently inspect it
+ * for a bounded set of sanitized failure classifications (state-lock contention/timeout, backend
+ * unavailability - see {@code ControlledTerraformOperationCoordinator#classifyStderrFailure}).
+ * {@code stderrSize}/{@code stderrSha256} remain the only PERSISTED representation of stderr
+ * anywhere in evidence/ledger storage; {@code stderr()} itself must never be written to a log
+ * message, exception message, {@code RunnerEvidence}, or ledger JSON - per the Phase 2B-3 design
+ * doc's caution about not persisting arbitrary process/tool output that could someday contain
+ * sensitive content.
  */
 public record TerraformProcessResult(
         boolean startFailed,
@@ -23,6 +30,7 @@ public record TerraformProcessResult(
         byte[] stdout,
         long stdoutSize,
         String stdoutSha256,
+        byte[] stderr,
         long stderrSize,
         String stderrSha256,
         Instant startedAt,
@@ -30,6 +38,7 @@ public record TerraformProcessResult(
 ) {
     public TerraformProcessResult {
         stdout = stdout == null ? new byte[0] : stdout.clone();
+        stderr = stderr == null ? new byte[0] : stderr.clone();
         if (startedAt == null) {
             throw new IllegalArgumentException("startedAt is required");
         }
@@ -48,5 +57,10 @@ public record TerraformProcessResult(
     @Override
     public byte[] stdout() {
         return stdout.clone();
+    }
+
+    @Override
+    public byte[] stderr() {
+        return stderr.clone();
     }
 }

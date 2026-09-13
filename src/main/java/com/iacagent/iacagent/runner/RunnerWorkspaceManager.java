@@ -238,6 +238,78 @@ public final class RunnerWorkspaceManager {
         }
     }
 
+    /**
+     * Phase 2B-5: writes a runner-owned {@code terraform { backend "local" { path = ... } }}
+     * declaration into {@code workspace}, so the trusted-resolved backend
+     * ({@link TrustedBackendResolver}) - never a repository-declared one, which
+     * {@link ControlledTerraformOperationCoordinator#executeInitForPlan} rejects outright before
+     * this is even called - is what {@code terraform init}/{@code plan} actually see. Terraform
+     * allows at most one {@code backend} block across a whole configuration; the source-policy check
+     * having already rejected a staged file that declares one is what makes this file the ONLY
+     * backend declaration Terraform will ever find here.
+     */
+    public Path writeTrustedLocalBackendFile(Path workspace, Path statePath) {
+        try {
+            Path backendFile = workspace.resolve("_runner_backend.tf");
+            requireUnderRoot(backendFile.normalize(), rootDirectory);
+            Files.createDirectories(statePath.getParent());
+            String escapedStatePath = statePath.toString().replace("\\", "\\\\").replace("\"", "\\\"");
+            String content = "terraform {\n  backend \"local\" {\n    path = \"" + escapedStatePath + "\"\n  }\n}\n";
+            Files.writeString(backendFile, content);
+            return backendFile;
+        } catch (IOException e) {
+            throw new RunnerWorkspaceException("failed to write trusted backend declaration into workspace " + workspace, e);
+        }
+    }
+
+    /**
+     * Phase 2B-5: computes the runner-owned saved-plan path {@code <workspace>/plan/tfplan} - never
+     * a caller-supplied path - creating its parent directory and rejecting outright if a symlink (or
+     * anything else) already exists at that exact path, so {@code terraform plan -out=...} always
+     * either creates a brand-new regular file there or fails, never silently follows or overwrites
+     * something already planted at that location.
+     */
+    public Path preparePlanArtifactPath(Path workspace) {
+        try {
+            Path planDir = workspace.resolve("plan");
+            Files.createDirectories(planDir);
+            requireUnderRoot(planDir.toRealPath(), rootDirectory.toRealPath());
+            Path planPath = planDir.resolve("tfplan");
+            if (Files.exists(planPath, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                throw new RunnerWorkspaceException("saved-plan path must not already exist: " + planPath, null);
+            }
+            return planPath;
+        } catch (IOException e) {
+            throw new RunnerWorkspaceException("failed to prepare saved-plan path in workspace " + workspace, e);
+        }
+    }
+
+    /**
+     * Phase 2B-5: after {@code terraform plan} exits successfully (or with the
+     * {@code -detailed-exitcode} "changes present" code), verifies the saved-plan path is a genuine,
+     * workspace-contained regular file - never a symlink Terraform (or a compromised child process)
+     * might have planted instead of writing a real plan - and returns its real path, ready for
+     * hashing. Never trusts the path merely because {@code terraform plan} exited successfully.
+     */
+    public Path validateSavedPlanArtifact(Path planPath) {
+        if (Files.isSymbolicLink(planPath)) {
+            throw new RunnerWorkspaceException("saved-plan path must not be a symlink: " + planPath, null);
+        }
+        if (!Files.isRegularFile(planPath)) {
+            throw new RunnerWorkspaceException("saved-plan path does not exist or is not a regular file: " + planPath, null);
+        }
+        try {
+            Path real = planPath.toRealPath();
+            requireUnderRoot(real, rootDirectory.toRealPath());
+            if (!Files.isRegularFile(real)) {
+                throw new RunnerWorkspaceException("saved-plan real path is not a regular file: " + real, null);
+            }
+            return real;
+        } catch (IOException e) {
+            throw new RunnerWorkspaceException("failed to validate saved-plan artifact " + planPath, e);
+        }
+    }
+
     private static final class UnsafeConfigSourceException extends IOException {
     }
 

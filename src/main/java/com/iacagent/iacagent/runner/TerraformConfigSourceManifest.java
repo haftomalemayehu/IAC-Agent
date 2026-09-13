@@ -29,12 +29,33 @@ import java.util.Set;
  * <p>{@code moduleSources} is still populated (parsed and canonicalized) even though Phase 2B-4
  * never lets a non-empty {@code moduleSources} reach {@code init} - see
  * {@link RunnerReasonCode#TERRAFORM_MODULE_DEPENDENCY_GRAPH_UNRESOLVED}.
+ *
+ * <p>{@code declaresBackendBlock} (Phase 2B-5): {@code true} if any staged file declares a
+ * {@code backend} block nested inside a {@code terraform { ... }} block. The repository may
+ * describe backend INTENT but must never establish backend AUTHORITY - only
+ * {@link TrustedBackendResolver} may determine which backend/state {@code TERRAFORM_PLAN} actually
+ * reads - so {@link ControlledTerraformOperationCoordinator} blocks with
+ * {@link RunnerReasonCode#TERRAFORM_BACKEND_BLOCK_NOT_ALLOWED} whenever this is {@code true}, before
+ * {@code init}/{@code plan} is ever launched.
+ *
+ * <p>{@code declaresRemoteStateDataSource} (Phase 2B-5 security amendment): {@code true} if any
+ * staged file declares a {@code data "terraform_remote_state" "..." { ... }} block. This built-in
+ * data source accepts its OWN {@code backend}/{@code config} coordinates, entirely independent of
+ * {@link TrustedBackendResolver} - the exact state-boundary escape a plain {@code backend} block
+ * check does not close (the built-in {@code terraform} provider that backs it is, correctly,
+ * exempt from the ordinary provider-source policy - see {@code TerraformNativeSourceExtractor}'s
+ * {@code BUILTIN_PROVIDER_LOCAL_NAME}). {@link ControlledTerraformOperationCoordinator#executePlan}
+ * blocks with {@link RunnerReasonCode#TERRAFORM_REMOTE_STATE_DATA_SOURCE_NOT_ALLOWED} whenever this
+ * is {@code true}, before {@code init}/{@code plan} is ever launched, regardless of what backend
+ * type or coordinates the data source's own {@code config} declares.
  */
 record TerraformConfigSourceManifest(
         List<String> providerSources,
         List<String> moduleSources,
         Set<String> declaredProviderLocalNames,
-        Set<String> impliedProviderLocalNames
+        Set<String> impliedProviderLocalNames,
+        boolean declaresBackendBlock,
+        boolean declaresRemoteStateDataSource
 ) {
     TerraformConfigSourceManifest {
         providerSources = providerSources == null ? List.of() : List.copyOf(providerSources);

@@ -61,6 +61,8 @@ final class TerraformNativeSourceExtractor {
         Map<String, String> providerSourcesByLocalName = new LinkedHashMap<>();
         Map<String, String> moduleSourcesByLabel = new LinkedHashMap<>();
         Set<String> impliedProviderLocalNames = new LinkedHashSet<>();
+        boolean declaresBackendBlock = false;
+        boolean declaresRemoteStateDataSource = false;
         for (Block block : top.blocks()) {
             if (block.type().equals("terraform")) {
                 for (Block child : block.children()) {
@@ -68,6 +70,13 @@ final class TerraformNativeSourceExtractor {
                         for (Map.Entry<String, Value> entry : child.attributes().entrySet()) {
                             providerSourcesByLocalName.put(entry.getKey(), resolveProviderSource(entry.getKey(), entry.getValue()));
                         }
+                    } else if (child.type().equals("backend")) {
+                        // The repository may describe backend INTENT but must never establish
+                        // backend AUTHORITY - see docs/phase-2b5-controlled-plan-state-read.md §5.
+                        // Detected here (a fact the extractor reports), enforced by the coordinator
+                        // (TERRAFORM_BACKEND_BLOCK_NOT_ALLOWED) - same division of responsibility as
+                        // module-presence/implicit-provider checks.
+                        declaresBackendBlock = true;
                     }
                 }
             } else if (block.type().equals("module")) {
@@ -77,6 +86,13 @@ final class TerraformNativeSourceExtractor {
                 String label = block.labels().get(0);
                 moduleSourcesByLabel.put(label, resolveModuleSource(label, block.attributes()));
             } else if (block.type().equals("resource") || block.type().equals("data")) {
+                if (block.type().equals("data") && !block.labels().isEmpty() && block.labels().get(0).equals("terraform_remote_state")) {
+                    // Terraform's built-in terraform_remote_state data source accepts its OWN
+                    // backend/config coordinates, independent of TrustedBackendResolver - the exact
+                    // state-boundary escape this check exists to close. See
+                    // docs/phase-2b5-controlled-plan-state-read.md §5a.
+                    declaresRemoteStateDataSource = true;
+                }
                 addImpliedProviderLocalName(impliedProviderLocalNames, effectiveProviderLocalNameFor(block.type(), block.labels(), block.attributes()));
             } else if (block.type().equals("provider")) {
                 if (block.labels().size() == 1) {
@@ -93,7 +109,8 @@ final class TerraformNativeSourceExtractor {
                 // needed here to avoid double-counting or under-counting.
             }
         }
-        return new TerraformKeyedConfigSources(providerSourcesByLocalName, moduleSourcesByLabel, impliedProviderLocalNames);
+        return new TerraformKeyedConfigSources(
+                providerSourcesByLocalName, moduleSourcesByLabel, impliedProviderLocalNames, declaresBackendBlock, declaresRemoteStateDataSource);
     }
 
     /** Determines the provider local name Terraform will ACTUALLY use for a {@code resource}/

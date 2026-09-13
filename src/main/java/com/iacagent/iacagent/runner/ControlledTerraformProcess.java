@@ -72,7 +72,7 @@ public final class ControlledTerraformProcess {
             process = builder.start();
         } catch (IOException e) {
             return new TerraformProcessResult(true, false, false, null,
-                    new byte[0], 0, emptyHash(), 0, emptyHash(), startedAt, Instant.now());
+                    new byte[0], 0, emptyHash(), new byte[0], 0, emptyHash(), startedAt, Instant.now());
         }
 
         try {
@@ -122,7 +122,7 @@ public final class ControlledTerraformProcess {
         return new TerraformProcessResult(
                 false, timedOut, outputLimitExceeded, exitCode,
                 stdoutReader.capturedBytes(), stdoutReader.totalBytesRead(), stdoutReader.sha256Hex(),
-                stderrReader.totalBytesRead(), stderrReader.sha256Hex(),
+                stderrReader.capturedBytes(), stderrReader.totalBytesRead(), stderrReader.sha256Hex(),
                 startedAt, completedAt);
     }
 

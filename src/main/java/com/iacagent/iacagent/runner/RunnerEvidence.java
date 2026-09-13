@@ -43,7 +43,8 @@ public record RunnerEvidence(
         TerraformProcessEvidence terraformProcessEvidence,
         TerraformInitEvidence terraformInitEvidence,
         TerraformValidateEvidence terraformValidateEvidence,
-        TerraformProviderSchemaEvidence terraformProviderSchemaEvidence
+        TerraformProviderSchemaEvidence terraformProviderSchemaEvidence,
+        TerraformPlanEvidence terraformPlanEvidence
 ) {
     public RunnerEvidence {
         reasonCodes = reasonCodes == null ? List.of() : List.copyOf(reasonCodes);
@@ -58,11 +59,13 @@ public record RunnerEvidence(
         // TERRAFORM_INIT; terraformValidateEvidence/terraformProviderSchemaEvidence are non-null
         // only for TERRAFORM_VALIDATE/TERRAFORM_PROVIDERS_SCHEMA respectively (each of which
         // embeds its own internally-run init attempt's TerraformInitEvidence, so it is never
-        // duplicated into this record's own terraformInitEvidence field as well). Exactly one of
-        // these four Terraform evidence fields is ever non-null for a given RunnerEvidence.
+        // duplicated into this record's own terraformInitEvidence field as well).
+        //
+        // Phase 2B-5 adds terraformPlanEvidence, non-null only for TERRAFORM_PLAN. Exactly one of
+        // these five Terraform evidence fields is ever non-null for a given RunnerEvidence.
     }
 
-    /** Convenience constructor for every operation before Phase 2B-4 - the three new evidence
+    /** Convenience constructor for every operation before Phase 2B-4 - the four new evidence
      * fields are always null. */
     public RunnerEvidence(
             String runnerRequestId, String runnerId, String runnerClass, Set<String> runnerEnvironmentScope, RunnerOperation operation,
@@ -74,7 +77,23 @@ public record RunnerEvidence(
         this(runnerRequestId, runnerId, runnerClass, runnerEnvironmentScope, operation, repository, commitSha, environment, planArtifactId,
                 expectedPlanSha256, observedPlanSha256, terraformVersionExpected, terraformVersionObserved, providerLockHashExpected,
                 providerLockHashObserved, approvalId, approvalValidationResult, finalState, reasonCodes, startedAt, completedAt,
-                terraformProcessEvidence, null, null, null);
+                terraformProcessEvidence, null, null, null, null);
+    }
+
+    /** Convenience constructor for Phase 2B-4 operations (init/validate/providers-schema) - the new
+     * Phase 2B-5 plan-evidence field is always null. */
+    public RunnerEvidence(
+            String runnerRequestId, String runnerId, String runnerClass, Set<String> runnerEnvironmentScope, RunnerOperation operation,
+            String repository, String commitSha, String environment, String planArtifactId, String expectedPlanSha256, String observedPlanSha256,
+            String terraformVersionExpected, String terraformVersionObserved, String providerLockHashExpected, String providerLockHashObserved,
+            String approvalId, ApprovalValidationReasonCode approvalValidationResult, RunnerState finalState, List<RunnerReasonCode> reasonCodes,
+            Instant startedAt, Instant completedAt, TerraformProcessEvidence terraformProcessEvidence, TerraformInitEvidence terraformInitEvidence,
+            TerraformValidateEvidence terraformValidateEvidence, TerraformProviderSchemaEvidence terraformProviderSchemaEvidence
+    ) {
+        this(runnerRequestId, runnerId, runnerClass, runnerEnvironmentScope, operation, repository, commitSha, environment, planArtifactId,
+                expectedPlanSha256, observedPlanSha256, terraformVersionExpected, terraformVersionObserved, providerLockHashExpected,
+                providerLockHashObserved, approvalId, approvalValidationResult, finalState, reasonCodes, startedAt, completedAt,
+                terraformProcessEvidence, terraformInitEvidence, terraformValidateEvidence, terraformProviderSchemaEvidence, null);
     }
 
     public boolean isReadyForFutureExecution() {

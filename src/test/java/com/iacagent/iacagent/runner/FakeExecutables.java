@@ -169,6 +169,42 @@ final class FakeExecutables {
         return write(dir, name, script);
     }
 
+    /**
+     * A fake "terraform" covering the Phase 2B-5 {@code TERRAFORM_PLAN} operation set: {@code version},
+     * {@code init} (against a real backend - the fixture does not care whether {@code -backend=false}
+     * was passed, since it never actually touches a backend), {@code plan}, and {@code show}. The
+     * {@code plan} branch parses {@code -out=<path>} out of its own argv (exactly as real Terraform
+     * would receive it) and exposes it to {@code planScriptBody} as the shell variable
+     * {@code $outpath}, so a test's script body can write (or deliberately not write) plan bytes
+     * there before exiting with whatever code it needs to simulate
+     * ({@code -detailed-exitcode}'s {@code 0}/{@code 2}, or a real failure).
+     */
+    static Path terraformPlanStub(Path dir, String name, String reportedVersion,
+                                   String initScriptBody, String planScriptBody, String showScriptBody) throws IOException {
+        String script = "#!/bin/sh\n"
+                + "if [ \"$1\" = \"version\" ]; then\n"
+                + "  echo '{\"terraform_version\":\"" + reportedVersion + "\"}'\n"
+                + "  exit 0\n"
+                + "fi\n"
+                + "if [ \"$1\" = \"init\" ]; then\n"
+                + initScriptBody + "\n"
+                + "fi\n"
+                + "if [ \"$1\" = \"plan\" ]; then\n"
+                + "  outpath=\"\"\n"
+                + "  for arg in \"$@\"; do\n"
+                + "    case \"$arg\" in\n"
+                + "      -out=*) outpath=\"${arg#-out=}\" ;;\n"
+                + "    esac\n"
+                + "  done\n"
+                + planScriptBody + "\n"
+                + "fi\n"
+                + "if [ \"$1\" = \"show\" ]; then\n"
+                + showScriptBody + "\n"
+                + "fi\n"
+                + "exit 1\n";
+        return write(dir, name, script);
+    }
+
     static String sha256Hex(Path file) throws IOException {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");

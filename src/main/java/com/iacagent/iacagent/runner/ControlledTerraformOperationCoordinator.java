@@ -1,5 +1,7 @@
 package com.iacagent.iacagent.runner;
 
+import com.iacagent.iacagent.PlanJsonParser;
+import com.iacagent.iacagent.PlanSummary;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -62,6 +64,11 @@ final class ControlledTerraformOperationCoordinator {
     private final Duration providersSchemaTimeout;
     private final TerraformSourcePolicy sourcePolicy;
     private final TerraformBackendMode backendMode;
+    private final TrustedBackendResolver backendResolver;
+    private final TerraformCredentialProvider credentialProvider;
+    private final TerraformPlanArtifactStore planArtifactStore;
+    private final Duration planInitTimeout;
+    private final Duration planTimeout;
 
     private final Object attestationLock = new Object();
     private VerifiedTerraformExecutable cachedAttestation;
@@ -88,7 +95,11 @@ final class ControlledTerraformOperationCoordinator {
                 fmtCheckTimeout, fmtCheckTimeout, fmtCheckTimeout, TerraformSourcePolicy.restrictiveDefault(), TerraformBackendMode.LOCAL_ONLY);
     }
 
-    /** Phase 2B-4 constructor. */
+    /** Phase 2B-4 constructor - EXACT ORIGINAL SIGNATURE, unchanged, so every existing Phase 2B-4
+     * test/call site keeps compiling and behaving identically. Leaves the Phase 2B-5
+     * backend/credential/plan-artifact-store dependencies unset ({@code null}) - a coordinator built
+     * this way throws {@link IllegalStateException} if {@link #executePlan} is ever called, exactly
+     * like the 6-arg constructor's relationship to the Phase 2B-4 methods. */
     ControlledTerraformOperationCoordinator(
             TerraformExecutableProvider executableProvider,
             TerraformCommandFactory commandFactory,
@@ -102,6 +113,30 @@ final class ControlledTerraformOperationCoordinator {
             Duration providersSchemaTimeout,
             TerraformSourcePolicy sourcePolicy,
             TerraformBackendMode backendMode) {
+        this(executableProvider, commandFactory, process, workspaceManager, versionTimeout, fmtCheckTimeout, showPlanJsonTimeout,
+                initTimeout, validateTimeout, providersSchemaTimeout, sourcePolicy, backendMode,
+                null, null, null, initTimeout, initTimeout);
+    }
+
+    /** Phase 2B-5 constructor. */
+    ControlledTerraformOperationCoordinator(
+            TerraformExecutableProvider executableProvider,
+            TerraformCommandFactory commandFactory,
+            ControlledTerraformProcess process,
+            RunnerWorkspaceManager workspaceManager,
+            Duration versionTimeout,
+            Duration fmtCheckTimeout,
+            Duration showPlanJsonTimeout,
+            Duration initTimeout,
+            Duration validateTimeout,
+            Duration providersSchemaTimeout,
+            TerraformSourcePolicy sourcePolicy,
+            TerraformBackendMode backendMode,
+            TrustedBackendResolver backendResolver,
+            TerraformCredentialProvider credentialProvider,
+            TerraformPlanArtifactStore planArtifactStore,
+            Duration planInitTimeout,
+            Duration planTimeout) {
         this.executableProvider = require(executableProvider, "executableProvider");
         this.commandFactory = require(commandFactory, "commandFactory");
         this.process = require(process, "process");
@@ -114,6 +149,11 @@ final class ControlledTerraformOperationCoordinator {
         this.providersSchemaTimeout = requirePositive(providersSchemaTimeout, "providersSchemaTimeout");
         this.sourcePolicy = require(sourcePolicy, "sourcePolicy");
         this.backendMode = require(backendMode, "backendMode");
+        this.backendResolver = backendResolver; // nullable - see this constructor's Phase 2B-4 delegate javadoc
+        this.credentialProvider = credentialProvider; // nullable
+        this.planArtifactStore = planArtifactStore; // nullable
+        this.planInitTimeout = requirePositive(planInitTimeout, "planInitTimeout");
+        this.planTimeout = requirePositive(planTimeout, "planTimeout");
     }
 
     private static <T> T require(T value, String name) {
@@ -639,6 +679,330 @@ final class ControlledTerraformOperationCoordinator {
                 providerIdentities.isEmpty() ? initEvidence.providerSourcesRequested() : providerIdentities,
                 result.stdoutSha256(), result.stdoutSize(), initEvidence.terraformVersionObserved(),
                 result.exitCode(), result.timedOut(), state, reasonCodes, startedAt, result.completedAt());
+    }
+
+    // ===================== Phase 2B-5: TERRAFORM_PLAN =====================
+
+    /**
+     * Produces a real, saved Terraform plan artifact against a trusted, control-plane-resolved
+     * backend/state target. Sequencing: lockfile pre-check → config identity → source-policy gates
+     * (backend-block / module-presence / implicit-provider / provider-source, all reused unchanged
+     * from {@link #executeInit}) → trusted backend resolution → credentials → executable attestation
+     * → runner-owned backend file + CLI config → controlled {@code init} against the REAL backend →
+     * plan input identity → {@code terraform plan -out=...} → saved-plan validation/hashing →
+     * TOCTOU rehash → {@code terraform show -json} on the exact hashed bytes → durable artifact
+     * storage. Every pre-launch check that fails returns a {@code BLOCKED} evidence record with no
+     * process ever started.
+     */
+    TerraformPlanEvidence executePlan(RunnerRequest request, RunnerIdentity identity, Path workspace, List<TerraformConfigIdentity.NamedConfigFile> configFiles) {
+        if (workspaceManager == null || backendResolver == null || credentialProvider == null || planArtifactStore == null) {
+            throw new IllegalStateException("this coordinator was not constructed with backend/credential/plan-artifact-store dependencies - TERRAFORM_PLAN is unavailable");
+        }
+        Instant startedAt = Instant.now();
+        String runnerId = identity == null ? null : identity.runnerId();
+
+        Path lockfilePath = workspace.resolve(".terraform.lock.hcl");
+        LockfileCheck before = checkLockfile(lockfilePath);
+        if (!before.isSafe()) {
+            return blockedPlan(request, runnerId, before.failureReason(), null, null, null, null, null, null, startedAt);
+        }
+
+        String configSha256 = TerraformConfigIdentity.computeSha256(withLockfileEntry(configFiles, before));
+
+        TerraformConfigSourceManifest manifest;
+        try {
+            manifest = TerraformConfigSourceExtractor.extract(configFiles);
+        } catch (TerraformConfigSourceExtractionException e) {
+            return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_SOURCE_EXTRACTION_FAILED, configSha256, null, null, null, null, null, startedAt);
+        }
+        if (manifest.declaresBackendBlock()) {
+            return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_BACKEND_BLOCK_NOT_ALLOWED, configSha256, null, null, null, null, null, startedAt);
+        }
+        if (manifest.declaresRemoteStateDataSource()) {
+            return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_REMOTE_STATE_DATA_SOURCE_NOT_ALLOWED, configSha256, null, null, null, null, null, startedAt);
+        }
+        if (!manifest.moduleSources().isEmpty()) {
+            return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_MODULE_DEPENDENCY_GRAPH_UNRESOLVED, configSha256, null, null, null, null, null, startedAt);
+        }
+        if (!manifest.undeclaredImpliedProviderLocalNames().isEmpty()) {
+            return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_PROVIDER_REQUIREMENT_IMPLICIT, configSha256, null, null, null, null, null, startedAt);
+        }
+        for (String providerSource : manifest.providerSources()) {
+            if (!sourcePolicy.isProviderSourceAllowed(providerSource)) {
+                return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_PROVIDER_SOURCE_UNTRUSTED, configSha256, null, null, null, null, null, startedAt);
+            }
+        }
+
+        TerraformBackendResolution backend;
+        try {
+            backend = backendResolver.resolve(request.repository(), request.environment());
+        } catch (RuntimeException e) {
+            return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_STATE_BACKEND_UNAVAILABLE, configSha256, null, null, null, null, null, startedAt);
+        }
+        String stateIdentitySha256 = backend.stateIdentity().sha256Hex();
+
+        TerraformCredentialMaterial credentials;
+        try {
+            credentials = credentialProvider.obtain(request, backend.stateIdentity());
+        } catch (RuntimeException e) {
+            return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_STATE_BACKEND_UNAVAILABLE, configSha256, stateIdentitySha256, null, backend, null, null, startedAt);
+        }
+
+        AttestationOutcome attestation = obtainVerifiedExecutable(request, workspace);
+        if (!attestation.isVerified()) {
+            return blockedPlan(request, runnerId, attestation.failureReason(), configSha256, stateIdentitySha256,
+                    attestation.observedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt);
+        }
+
+        try {
+            workspaceManager.writeTrustedLocalBackendFile(workspace, backend.localStatePath());
+            workspaceManager.prepareTerraformCliConfig(workspace);
+        } catch (RuntimeException e) {
+            return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_STATE_BACKEND_UNAVAILABLE, configSha256, stateIdentitySha256,
+                    attestation.descriptor().expectedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt);
+        }
+
+        ControlledTerraformCommand initCommand = commandFactory.initForPlanCommand(
+                request, attestation.descriptor(), workspace, planInitTimeout, credentials.environmentVariables());
+        TerraformProcessResult initResult = process.execute(initCommand);
+        RunnerReasonCode initFailureReason = classifyNonPlanFailure(initResult, RunnerReasonCode.TERRAFORM_PLAN_INIT_FAILED);
+        if (initFailureReason != null) {
+            return blockedPlan(request, runnerId, initFailureReason, configSha256, stateIdentitySha256,
+                    attestation.observedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt);
+        }
+
+        String planInputSha256 = TerraformPlanInputIdentity.computeSha256(
+                configSha256, stateIdentitySha256, request.providerLockHash(),
+                attestation.descriptor().expectedSha256(), attestation.descriptor().expectedVersion(),
+                request.environment(), "PLAN_LOCAL_BACKEND_REFERENCE", List.of());
+
+        Path planPath;
+        try {
+            planPath = workspaceManager.preparePlanArtifactPath(workspace);
+        } catch (RuntimeException e) {
+            return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_PLAN_ARTIFACT_INVALID, configSha256, stateIdentitySha256,
+                    attestation.observedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt);
+        }
+
+        ControlledTerraformCommand planCommand = commandFactory.planCommand(
+                request, attestation.descriptor(), workspace, planPath, planTimeout, credentials.environmentVariables());
+        TerraformProcessResult planResult = process.execute(planCommand);
+
+        return interpretPlan(request, runnerId, workspace, configSha256, stateIdentitySha256, planInputSha256, attestation.descriptor(),
+                attestation.observedSha256(), attestation.observedVersion(), backend, credentials.sourceIdentifier(), planPath, planResult, startedAt);
+    }
+
+    /** {@code null} if the process succeeded (exit 0); otherwise the reason code for its failure -
+     * timeout/output-limit/start-failed reuse the same reason codes every other operation in this
+     * coordinator uses; a genuine nonzero-exit failure is first offered to {@link #classifyStderrFailure}
+     * for a more specific sanitized classification (lock contention/timeout, backend unavailable)
+     * before falling back to {@code genericFailureReason}. */
+    private RunnerReasonCode classifyNonPlanFailure(TerraformProcessResult result, RunnerReasonCode genericFailureReason) {
+        if (result.timedOut()) {
+            return RunnerReasonCode.TERRAFORM_PROCESS_TIMEOUT;
+        }
+        if (result.outputLimitExceeded()) {
+            return RunnerReasonCode.TERRAFORM_OUTPUT_LIMIT_EXCEEDED;
+        }
+        if (result.startFailed()) {
+            return RunnerReasonCode.TERRAFORM_PROCESS_START_FAILED;
+        }
+        if (result.exitCode() != 0) {
+            RunnerReasonCode classified = classifyStderrFailure(result.stderr());
+            return classified != null ? classified : genericFailureReason;
+        }
+        return null;
+    }
+
+    /**
+     * Transient, sanitized classification of a failed init-for-plan/plan process's BOUNDED stderr
+     * into one of a small, deterministic set of reason codes - a Phase 2B-5 security-amendment
+     * capability, explicitly permitted by the authorization ("the process layer can transiently
+     * inspect bounded output and emit a sanitized classification"). The raw bytes examined here are
+     * never returned, logged, or embedded in an exception message by this method or any caller -
+     * only the resulting {@link RunnerReasonCode} (or {@code null}) ever escapes it. No LLM or
+     * heuristic scoring is involved: this is a fixed, deterministic, case-insensitive substring
+     * check against a small set of known Terraform diagnostic phrasings.
+     *
+     * <p>Epistemic humility (explicit requirement): Terraform's "lock already held" and "lock
+     * acquisition timed out" failures share the same "Error acquiring the state lock" / "state
+     * lock" banner text; only the timeout case additionally emits timeout-specific wording (the
+     * local-backend/generic state-locking retry path's "timeout while attempting to acquire state
+     * lock" message, surfaced because {@link TerraformCommandFactory}'s fixed, internally-controlled
+     * {@code -lock-timeout} bound - never derived from the request - gives a genuine timeout window
+     * to observe). When stderr mentions a state lock but does NOT contain that timeout-specific
+     * wording, this method returns the less specific {@link RunnerReasonCode#TERRAFORM_STATE_LOCK_FAILED}
+     * rather than guessing - it never fabricates a distinction the text does not actually support.
+     * Similarly, a backend failure is classified as {@link RunnerReasonCode#TERRAFORM_STATE_BACKEND_UNAVAILABLE}
+     * only when stderr mentions both "backend" and clear failure/configuration-error wording;
+     * anything less specific falls through to {@code null} (the caller's generic
+     * {@code TERRAFORM_PLAN_INIT_FAILED}/{@code TERRAFORM_PLAN_FAILED}).
+     */
+    private static RunnerReasonCode classifyStderrFailure(byte[] stderr) {
+        if (stderr == null || stderr.length == 0) {
+            return null;
+        }
+        String text = new String(stderr, StandardCharsets.UTF_8).toLowerCase(java.util.Locale.ROOT);
+        if (text.contains("state lock")) {
+            return text.contains("timeout")
+                    ? RunnerReasonCode.TERRAFORM_STATE_LOCK_TIMEOUT
+                    : RunnerReasonCode.TERRAFORM_STATE_LOCK_FAILED;
+        }
+        boolean mentionsBackend = text.contains("backend");
+        boolean mentionsUnavailability = text.contains("error configuring") || text.contains("failed to") || text.contains("could not");
+        if (mentionsBackend && mentionsUnavailability) {
+            return RunnerReasonCode.TERRAFORM_STATE_BACKEND_UNAVAILABLE;
+        }
+        return null;
+    }
+
+    private TerraformPlanEvidence interpretPlan(
+            RunnerRequest request, String runnerId, Path workspace, String configSha256, String stateIdentitySha256, String planInputSha256,
+            TerraformExecutableDescriptor descriptor, String executableSha256Observed, String terraformVersionObserved,
+            TerraformBackendResolution backend, String credentialSourceIdentifier, Path planPath,
+            TerraformProcessResult result, Instant startedAt) {
+        if (result.timedOut()) {
+            return planEvidence(request, runnerId, configSha256, stateIdentitySha256, planInputSha256, descriptor, executableSha256Observed,
+                    terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, null, null, 0, null,
+                    result.exitCode(), result.timedOut(), TerraformProcessState.TIMED_OUT, List.of(RunnerReasonCode.TERRAFORM_PROCESS_TIMEOUT),
+                    startedAt, result.completedAt());
+        }
+        if (result.outputLimitExceeded()) {
+            return planEvidence(request, runnerId, configSha256, stateIdentitySha256, planInputSha256, descriptor, executableSha256Observed,
+                    terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, null, null, 0, null,
+                    result.exitCode(), result.timedOut(), TerraformProcessState.OUTPUT_LIMIT_EXCEEDED, List.of(RunnerReasonCode.TERRAFORM_OUTPUT_LIMIT_EXCEEDED),
+                    startedAt, result.completedAt());
+        }
+        if (result.startFailed()) {
+            return planEvidence(request, runnerId, configSha256, stateIdentitySha256, planInputSha256, descriptor, executableSha256Observed,
+                    terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, null, null, 0, null,
+                    result.exitCode(), result.timedOut(), TerraformProcessState.BLOCKED, List.of(RunnerReasonCode.TERRAFORM_PROCESS_START_FAILED),
+                    startedAt, result.completedAt());
+        }
+        // terraform plan -detailed-exitcode: 0 = success/no changes, 2 = success/changes present,
+        // 1 (or anything else) = a genuine error. Exit code 2 is never treated as a failure.
+        int exitCode = result.exitCode();
+        if (exitCode != 0 && exitCode != 2) {
+            RunnerReasonCode classified = classifyStderrFailure(result.stderr());
+            RunnerReasonCode reason = classified != null ? classified : RunnerReasonCode.TERRAFORM_PLAN_FAILED;
+            return planEvidence(request, runnerId, configSha256, stateIdentitySha256, planInputSha256, descriptor, executableSha256Observed,
+                    terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, null, null, 0, null,
+                    result.exitCode(), false, TerraformProcessState.FAILED, List.of(reason),
+                    startedAt, result.completedAt());
+        }
+        TerraformProcessState state = exitCode == 0 ? TerraformProcessState.SUCCEEDED : TerraformProcessState.COMMAND_REPORTED_DIFFERENCE;
+
+        Path validatedPlanPath;
+        byte[] planBytes;
+        try {
+            validatedPlanPath = workspaceManager.validateSavedPlanArtifact(planPath);
+            planBytes = Files.readAllBytes(validatedPlanPath);
+        } catch (RuntimeException | IOException e) {
+            return planEvidence(request, runnerId, configSha256, stateIdentitySha256, planInputSha256, descriptor, executableSha256Observed,
+                    terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, null, null, 0, null,
+                    result.exitCode(), false, TerraformProcessState.FAILED, List.of(RunnerReasonCode.TERRAFORM_PLAN_ARTIFACT_INVALID),
+                    startedAt, result.completedAt());
+        }
+        String planSha256 = sha256Hex(planBytes);
+
+        // TOCTOU: recompute the hash from a fresh read immediately before SHOW ever launches.
+        byte[] recheckBytes;
+        try {
+            recheckBytes = Files.readAllBytes(validatedPlanPath);
+        } catch (IOException e) {
+            return planEvidence(request, runnerId, configSha256, stateIdentitySha256, planInputSha256, descriptor, executableSha256Observed,
+                    terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, null, null, 0, null,
+                    result.exitCode(), false, TerraformProcessState.FAILED, List.of(RunnerReasonCode.TERRAFORM_PLAN_HASH_MISMATCH),
+                    startedAt, result.completedAt());
+        }
+        if (!planSha256.equals(sha256Hex(recheckBytes))) {
+            return planEvidence(request, runnerId, configSha256, stateIdentitySha256, planInputSha256, descriptor, executableSha256Observed,
+                    terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, null, null, 0, null,
+                    result.exitCode(), false, TerraformProcessState.FAILED, List.of(RunnerReasonCode.TERRAFORM_PLAN_HASH_MISMATCH),
+                    startedAt, result.completedAt());
+        }
+
+        ControlledTerraformCommand showCommand = commandFactory.showPlanJsonCommand(request, descriptor, workspace, validatedPlanPath, showPlanJsonTimeout);
+        TerraformProcessResult showResult = process.execute(showCommand);
+        if (showResult.timedOut() || showResult.outputLimitExceeded() || showResult.startFailed() || showResult.exitCode() != 0
+                || !isValidJson(showResult.stdout())) {
+            RunnerReasonCode reason = showResult.timedOut() ? RunnerReasonCode.TERRAFORM_PROCESS_TIMEOUT
+                    : showResult.outputLimitExceeded() ? RunnerReasonCode.TERRAFORM_OUTPUT_LIMIT_EXCEEDED
+                    : showResult.startFailed() ? RunnerReasonCode.TERRAFORM_PROCESS_START_FAILED
+                    : !isValidJson(showResult.stdout()) ? RunnerReasonCode.TERRAFORM_OUTPUT_INVALID_JSON
+                    : RunnerReasonCode.TERRAFORM_PROCESS_EXIT_FAILED;
+            return planEvidence(request, runnerId, configSha256, stateIdentitySha256, planInputSha256, descriptor, executableSha256Observed,
+                    terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, null,
+                    showResult.stdoutSha256(), showResult.stdoutSize(), null,
+                    result.exitCode(), false, TerraformProcessState.FAILED, List.of(reason), startedAt, showResult.completedAt());
+        }
+
+        PlanSummary summary;
+        try {
+            summary = new PlanJsonParser().parse(new String(showResult.stdout(), StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            return planEvidence(request, runnerId, configSha256, stateIdentitySha256, planInputSha256, descriptor, executableSha256Observed,
+                    terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, null,
+                    showResult.stdoutSha256(), showResult.stdoutSize(), null,
+                    result.exitCode(), false, TerraformProcessState.FAILED, List.of(RunnerReasonCode.TERRAFORM_OUTPUT_INVALID_JSON),
+                    startedAt, showResult.completedAt());
+        }
+
+        TerraformPlanArtifactMetadata artifactMetadata;
+        try {
+            artifactMetadata = planArtifactStore.store(
+                    request.repository(), request.commitSha(), request.environment(), stateIdentitySha256, planInputSha256, planBytes);
+        } catch (RuntimeException e) {
+            // A hardening validation failure inside the durable store (e.g. an unsafe on-disk state
+            // it refuses to write through) must fail closed as structured evidence, never propagate
+            // as an uncaught exception through executePlan/ControlledRunner#execute. Never include
+            // plan bytes or e's message (which could echo path/content details) in evidence.
+            return planEvidence(request, runnerId, configSha256, stateIdentitySha256, planInputSha256, descriptor, executableSha256Observed,
+                    terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, null,
+                    showResult.stdoutSha256(), showResult.stdoutSize(), null,
+                    result.exitCode(), false, TerraformProcessState.FAILED, List.of(RunnerReasonCode.TERRAFORM_PLAN_ARTIFACT_INVALID),
+                    startedAt, showResult.completedAt());
+        }
+
+        return planEvidence(request, runnerId, configSha256, stateIdentitySha256, planInputSha256, descriptor, executableSha256Observed,
+                terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, artifactMetadata,
+                showResult.stdoutSha256(), showResult.stdoutSize(), summary,
+                result.exitCode(), false, state, List.of(), startedAt, showResult.completedAt());
+    }
+
+    private TerraformPlanEvidence blockedPlan(
+            RunnerRequest request, String runnerId, RunnerReasonCode reason, String configSha256, String stateIdentitySha256,
+            String terraformVersionObserved, TerraformBackendResolution backend, String credentialSourceIdentifier,
+            String executableSha256Observed, Instant startedAt) {
+        Instant completedAt = Instant.now();
+        return planEvidence(request, runnerId, configSha256, stateIdentitySha256, null, null, executableSha256Observed,
+                terraformVersionObserved, request.providerLockHash(), backend, credentialSourceIdentifier, null, null, 0, null,
+                0, false, TerraformProcessState.BLOCKED, List.of(reason), startedAt, completedAt);
+    }
+
+    private TerraformPlanEvidence planEvidence(
+            RunnerRequest request, String runnerId, String configSha256, String stateIdentitySha256, String planInputSha256,
+            TerraformExecutableDescriptor descriptor, String executableSha256Observed, String terraformVersionObserved,
+            String providerLockHash, TerraformBackendResolution backend, String credentialSourceIdentifier,
+            TerraformPlanArtifactMetadata artifactMetadata, String showJsonSha256, long showJsonByteSize, PlanSummary summary,
+            Integer exitCode, boolean timedOut, TerraformProcessState state, List<RunnerReasonCode> reasonCodes,
+            Instant startedAt, Instant completedAt) {
+        return new TerraformPlanEvidence(
+                request.runnerRequestId(), runnerId, request.repository(), request.commitSha(), request.environment(),
+                configSha256, stateIdentitySha256, planInputSha256,
+                descriptor == null ? null : descriptor.expectedSha256(), executableSha256Observed,
+                descriptor == null ? null : descriptor.expectedVersion(), terraformVersionObserved,
+                providerLockHash,
+                backend == null ? null : backend.stateIdentity().backendType(),
+                backend == null ? null : backend.stateIdentity().canonicalBackendInstanceId(),
+                credentialSourceIdentifier,
+                artifactMetadata == null ? null : artifactMetadata.planArtifactId(),
+                artifactMetadata == null ? null : artifactMetadata.planSha256(),
+                artifactMetadata == null ? 0 : artifactMetadata.planByteSize(),
+                showJsonSha256, showJsonByteSize,
+                summary == null ? null : summary.create(), summary == null ? null : summary.update(),
+                summary == null ? null : summary.replace(), summary == null ? null : summary.destroy(),
+                exitCode, timedOut, state, reasonCodes, startedAt, completedAt);
     }
 
     private TerraformProcessEvidence interpretVersion(

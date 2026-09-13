@@ -213,5 +213,56 @@ public enum RunnerReasonCode {
     /** Reserved: {@link TerraformNetworkRequirement} is a policy/evidence value only - nothing in
      * this package currently enforces network access at the OS level (Gate D), so this reason code
      * is defined but never produced by Phase 2B-4 itself. */
-    TERRAFORM_NETWORK_POLICY_VIOLATION
+    TERRAFORM_NETWORK_POLICY_VIOLATION,
+
+    // ---- Phase 2B-5: controlled Terraform plan + state-read boundary ----
+
+    /** The staged root configuration declares a {@code backend} block. The repository may describe
+     * backend INTENT but never backend AUTHORITY - only {@link TrustedBackendResolver} may determine
+     * which backend/state a plan reads. Blocks before {@code init}/{@code plan} is ever launched. */
+    TERRAFORM_BACKEND_BLOCK_NOT_ALLOWED,
+    /** {@link TrustedBackendResolver#resolve} could not produce a usable backend target (e.g. the
+     * trusted state root directory could not be created/accessed) - a genuine infrastructure
+     * failure, never a policy rejection. Blocks before any process is launched. */
+    TERRAFORM_STATE_BACKEND_UNAVAILABLE,
+    /** A Terraform backend failed specifically because it could not acquire its state lock (lock
+     * already held by another operation) - distinguished from a generic
+     * {@code TERRAFORM_PLAN_INIT_FAILED}/{@code TERRAFORM_PLAN_FAILED} by transient, bounded,
+     * never-persisted inspection of the process's own stderr inside trusted deterministic code (see
+     * {@code ControlledTerraformOperationCoordinator#classifyStderrFailure}) - the raw stderr
+     * content itself is never stored, logged, or surfaced in an exception message; only this
+     * sanitized classification reaches evidence. If Terraform's machine-visible output cannot
+     * reliably distinguish this from {@link #TERRAFORM_STATE_LOCK_TIMEOUT} in a given case, it
+     * collapses to this value rather than a fabricated distinction. */
+    TERRAFORM_STATE_LOCK_FAILED,
+    /** The same classification mechanism as {@link #TERRAFORM_STATE_LOCK_FAILED}, specifically for
+     * a lock-acquisition TIMEOUT (Terraform's own {@code -lock-timeout} elapsed) rather than an
+     * outright immediate lock-held failure. The lock timeout duration itself is a fixed, internally
+     * controlled value ({@code TerraformCommandFactory#LOCK_TIMEOUT_ARG}) - never derived from or
+     * exposed to the request - specifically so this classification's meaning is deterministic. */
+    TERRAFORM_STATE_LOCK_TIMEOUT,
+    /** {@code terraform init} (with the trusted-resolved real backend, for {@code TERRAFORM_PLAN}
+     * only) exited with a code this operation does not treat as success. Distinct from
+     * {@link #TERRAFORM_INIT_FAILED}, which is for the separate, {@code -backend=false}
+     * {@code TERRAFORM_INIT} operation. */
+    TERRAFORM_PLAN_INIT_FAILED,
+    /** {@code terraform plan} launched but exited with a code this operation does not treat as
+     * success or as a legitimate "changes present" outcome ({@code -detailed-exitcode}'s {@code 2}). */
+    TERRAFORM_PLAN_FAILED,
+    /** {@code terraform plan} reported success (or "changes present"), but the saved-plan path it
+     * was told to write to does not exist afterward, is not a regular file, is a symlink, or fails
+     * workspace real-path containment - never trusted as a genuine saved plan in this case. */
+    TERRAFORM_PLAN_ARTIFACT_INVALID,
+
+    // ---- Phase 2B-5 security amendment ----
+
+    /** The staged root configuration declares a {@code data "terraform_remote_state" "..." { ... }}
+     * block. This built-in data source accepts its OWN {@code backend}/{@code config} coordinates,
+     * entirely independent of {@link TrustedBackendResolver} - allowing the repository to redirect a
+     * plan to read state from a backend/location the trusted resolver never approved, regardless of
+     * what backend type or coordinates the data source's own {@code config} declares. Blocks before
+     * {@code init}/{@code plan} is ever launched. A future trusted cross-state dependency model may
+     * permit specific, resolver-mediated cases; this phase does not attempt to allowlist any
+     * repository-authored remote-state coordinates. */
+    TERRAFORM_REMOTE_STATE_DATA_SOURCE_NOT_ALLOWED
 }

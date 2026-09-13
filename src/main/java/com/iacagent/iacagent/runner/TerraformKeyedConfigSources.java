@@ -21,9 +21,13 @@ import java.util.Set;
  * {@code required_providers} entry for - accumulated as a UNION across files (an override file does
  * not "un-imply" a provider a regular file's resource block already implied), unlike the
  * provider/module maps' replace-by-key semantics.
+ *
+ * <p>{@code declaresBackendBlock}/{@code declaresRemoteStateDataSource} (Phase 2B-5) are likewise a
+ * UNION (OR) across files - any single file declaring either is enough to reject the whole
+ * configuration.
  */
 record TerraformKeyedConfigSources(Map<String, String> providerSourcesByLocalName, Map<String, String> moduleSourcesByLabel,
-                                    Set<String> impliedProviderLocalNames) {
+                                    Set<String> impliedProviderLocalNames, boolean declaresBackendBlock, boolean declaresRemoteStateDataSource) {
 
     TerraformKeyedConfigSources {
         providerSourcesByLocalName = providerSourcesByLocalName == null ? Map.of() : Map.copyOf(providerSourcesByLocalName);
@@ -32,7 +36,7 @@ record TerraformKeyedConfigSources(Map<String, String> providerSourcesByLocalNam
     }
 
     static TerraformKeyedConfigSources empty() {
-        return new TerraformKeyedConfigSources(Map.of(), Map.of(), Set.of());
+        return new TerraformKeyedConfigSources(Map.of(), Map.of(), Set.of(), false, false);
     }
 
     TerraformConfigSourceManifest toManifest() {
@@ -40,14 +44,18 @@ record TerraformKeyedConfigSources(Map<String, String> providerSourcesByLocalNam
                 List.copyOf(providerSourcesByLocalName.values()),
                 List.copyOf(moduleSourcesByLabel.values()),
                 providerSourcesByLocalName.keySet(),
-                impliedProviderLocalNames);
+                impliedProviderLocalNames,
+                declaresBackendBlock,
+                declaresRemoteStateDataSource);
     }
 
     /** Layers {@code overrides} on top of {@code this}: an entry in {@code overrides} for a key
      * already present here REPLACES this one's value for that key, exactly as a Terraform override
      * file's redeclaration of the same provider/module supersedes the original.
-     * {@code impliedProviderLocalNames} is unioned, never replaced - a resource block's implied
-     * provider requirement in one file is not erased by an override file processed afterward. */
+     * {@code impliedProviderLocalNames}/{@code declaresBackendBlock}/{@code declaresRemoteStateDataSource}
+     * are unioned, never replaced - a resource block's implied provider requirement (or a backend/
+     * remote-state-data-source's presence) in one file is not erased by an override file processed
+     * afterward. */
     TerraformKeyedConfigSources layeredWith(TerraformKeyedConfigSources overrides) {
         Map<String, String> providers = new LinkedHashMap<>(providerSourcesByLocalName);
         providers.putAll(overrides.providerSourcesByLocalName());
@@ -55,6 +63,8 @@ record TerraformKeyedConfigSources(Map<String, String> providerSourcesByLocalNam
         modules.putAll(overrides.moduleSourcesByLabel());
         Set<String> implied = new LinkedHashSet<>(impliedProviderLocalNames);
         implied.addAll(overrides.impliedProviderLocalNames());
-        return new TerraformKeyedConfigSources(providers, modules, implied);
+        return new TerraformKeyedConfigSources(providers, modules, implied,
+                declaresBackendBlock || overrides.declaresBackendBlock(),
+                declaresRemoteStateDataSource || overrides.declaresRemoteStateDataSource());
     }
 }

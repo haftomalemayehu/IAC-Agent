@@ -49,6 +49,7 @@ final class TerraformJsonSourceExtractor {
 
         Map<String, String> providerSourcesByLocalName = new LinkedHashMap<>();
         Map<String, String> moduleSourcesByLabel = new LinkedHashMap<>();
+        boolean declaresBackendBlock = false;
 
         for (JsonNode terraformNode : asNodeList(root.path("terraform"))) {
             for (JsonNode requiredProvidersNode : asNodeList(terraformNode.path("required_providers"))) {
@@ -58,6 +59,11 @@ final class TerraformJsonSourceExtractor {
                 for (String localName : requiredProvidersNode.propertyNames()) {
                     providerSourcesByLocalName.put(localName, resolveProviderSource(localName, requiredProvidersNode.path(localName)));
                 }
+            }
+            JsonNode backendNode = terraformNode.path("backend");
+            if (!backendNode.isMissingNode() && !backendNode.isNull()) {
+                // Same rule as native syntax: the repository must never establish backend authority.
+                declaresBackendBlock = true;
             }
         }
 
@@ -74,12 +80,18 @@ final class TerraformJsonSourceExtractor {
         }
 
         Set<String> impliedProviderLocalNames = new LinkedHashSet<>();
+        boolean declaresRemoteStateDataSource = false;
         for (String blockType : List.of("resource", "data")) {
             JsonNode typedNode = root.path(blockType);
             if (!typedNode.isObject()) {
                 continue;
             }
             for (String resourceType : typedNode.propertyNames()) {
+                if (blockType.equals("data") && resourceType.equals("terraform_remote_state")) {
+                    // Same state-boundary-escape concern as the native-syntax equivalent - see
+                    // TerraformConfigSourceManifest#declaresRemoteStateDataSource.
+                    declaresRemoteStateDataSource = true;
+                }
                 JsonNode byName = typedNode.path(resourceType);
                 if (!byName.isObject()) {
                     throw new TerraformConfigSourceExtractionException("'" + blockType + "." + resourceType + "' must be a JSON object keyed by resource name");
@@ -107,7 +119,7 @@ final class TerraformJsonSourceExtractor {
             // native-syntax comment in TerraformNativeSourceExtractor.
         }
 
-        return new TerraformKeyedConfigSources(providerSourcesByLocalName, moduleSourcesByLabel, impliedProviderLocalNames);
+        return new TerraformKeyedConfigSources(providerSourcesByLocalName, moduleSourcesByLabel, impliedProviderLocalNames, declaresBackendBlock, declaresRemoteStateDataSource);
     }
 
     /** Determines the provider local name Terraform will ACTUALLY use for one {@code resource}/

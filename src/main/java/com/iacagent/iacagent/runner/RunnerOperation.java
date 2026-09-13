@@ -50,5 +50,12 @@ public enum RunnerOperation {
      * {@link #TERRAFORM_INIT} against the staged configuration, then - only if that succeeds -
      * runs {@code terraform providers schema -json}. Never runs against a configuration that was
      * not just successfully, freshly initialized in this same call. */
-    TERRAFORM_PROVIDERS_SCHEMA
+    TERRAFORM_PROVIDERS_SCHEMA,
+    /** Phase 2B-5: stages the request's bound Terraform configuration (same resolution path as
+     * {@link #TERRAFORM_FMT_CHECK}), resolves a trusted backend/state target via
+     * {@link TrustedBackendResolver}, runs a controlled {@code init} against that REAL backend
+     * (never {@code -backend=false}), then {@code terraform plan -out=<runner-owned-path>}. Produces
+     * a durable, hash-bound saved-plan artifact. Never applies, never writes state intentionally,
+     * never mutates infrastructure. */
+    TERRAFORM_PLAN
 }
