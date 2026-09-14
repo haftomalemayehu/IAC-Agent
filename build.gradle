@@ -18,6 +18,37 @@ repositories {
     mavenCentral()
 }
 
+sourceSets {
+    postgresTest {
+        java.srcDir 'src/postgresTest/java'
+        resources.srcDir 'src/postgresTest/resources'
+        compileClasspath += sourceSets.main.output + sourceSets.test.output
+        runtimeClasspath += sourceSets.main.output + sourceSets.test.output
+    }
+}
+
+configurations {
+    postgresTestImplementation.extendsFrom testImplementation
+    postgresTestRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
+ext {
+    testcontainersVersion = '1.20.4'
+}
+
+// Spring Boot's dependency-management BOM declares a not-yet-released org.testcontainers:testcontainers
+// version that wins Gradle's highest-version conflict resolution against our own BOM import below,
+// which would silently select a nonexistent artifact. Force the whole org.testcontainers group to the
+// version this build actually requests.
+configurations.all {
+    resolutionStrategy.eachDependency { details ->
+        if (details.requested.group == 'org.testcontainers') {
+            details.useVersion(testcontainersVersion)
+            details.because('pin to a real, released Testcontainers version - see comment above')
+        }
+    }
+}
+
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter'
     implementation 'org.springframework.boot:spring-boot-starter-web'
@@ -26,10 +57,38 @@ dependencies {
     // see com.iacagent.iacagent.approval.jdbc). Not used by any execution path.
     implementation 'com.h2database:h2'
     implementation 'org.flywaydb:flyway-core'
+    // Phase 2B-6: flyway-core alone (as used by the H2 reference ledger, which needs no dialect
+    // module) does not bundle PostgreSQL dialect support in this Flyway version - PostgresRunnerLedgerRepository#migrate
+    // fails with "Unsupported Database" without this. Discovered via the real-PostgreSQL acceptance
+    // run, not by inspection - this would have broken production migrations too.
+    implementation 'org.flywaydb:flyway-database-postgresql'
+    // Phase 2B-6: production runner ledger - real PostgreSQL JDBC driver + a bounded HikariCP pool.
+    // Never used by the H2 reference ledger; only PostgresRunnerLedgerRepository depends on these.
+    implementation 'org.postgresql:postgresql'
+    implementation 'com.zaxxer:HikariCP'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    // Phase 2B-6: real-PostgreSQL acceptance/concurrency suite - deliberately a SEPARATE source set
+    // and task (see `postgresTest` below), never merged into `test`, so the default unit suite stays
+    // hermetic (no Docker required) and this suite's result is never silently conflated with it.
+    postgresTestImplementation platform("org.testcontainers:testcontainers-bom:${testcontainersVersion}")
+    postgresTestImplementation 'org.testcontainers:junit-jupiter'
+    postgresTestImplementation 'org.testcontainers:postgresql'
 }
 
 tasks.named('test') {
     useJUnitPlatform()
+}
+
+tasks.register('postgresTest', Test) {
+    description = 'Phase 2B-6 Gate B acceptance/concurrency suite against a REAL PostgreSQL (Testcontainers, or an external instance via -Dpgtest.* - see PostgresTestTarget). Not part of `check`/`test` - run explicitly, and never report Gate B closed if this did not actually run.'
+    group = 'verification'
+    testClassesDirs = sourceSets.postgresTest.output.classesDirs
+    classpath = sourceSets.postgresTest.runtimeClasspath
+    useJUnitPlatform()
+    shouldRunAfter test
+    // Forward -Dpgtest.* from the Gradle invocation into the forked test JVM - Gradle does not do
+    // this automatically for Test tasks.
+    systemProperties(System.getProperties().findAll { k, v -> k.toString().startsWith('pgtest.') })
 }

@@ -155,6 +155,11 @@ public final class ControlledRunner {
                 case DUPLICATE_SAME_FINGERPRINT -> RunnerReasonCode.DUPLICATE_RUNNER_REQUEST;
                 case FINGERPRINT_MISMATCH -> RunnerReasonCode.RUNNER_REQUEST_FINGERPRINT_MISMATCH;
                 case INCOMPLETE_PRIOR_CLAIM -> RunnerReasonCode.RUNNER_REQUEST_INCOMPLETE;
+                // AMBIGUOUS: the claim statement reached the database but this caller could not
+                // observe whether it committed - never treated as claimed, never retried here. A
+                // fresh resubmission of the same runnerRequestId is what safely resolves it (see
+                // RunnerClaimOutcome#AMBIGUOUS).
+                case AMBIGUOUS -> RunnerReasonCode.RUNNER_LEDGER_CLAIM_AMBIGUOUS;
                 case CLAIMED -> throw new IllegalStateException("unreachable");
             };
             return evidenceOf(request, startedAt, clock.instant(), RunnerState.BLOCKED,

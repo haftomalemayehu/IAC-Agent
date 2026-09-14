@@ -50,6 +50,13 @@ public enum RunnerReasonCode {
      * recording terminal evidence. Both look identical in persisted state and get this same,
      * conservative response; retrying the same id automatically is never attempted. */
     RUNNER_REQUEST_INCOMPLETE,
+    /** (Phase 2B-6) {@link RunnerLedgerRepository#claim} returned {@link RunnerClaimOutcome#AMBIGUOUS} -
+     * the claim's mutating statement reached the database but this caller could not observe whether
+     * it committed (e.g. a connection failure while awaiting acknowledgment). Never treated as
+     * claimed, never automatically retried by this call - a later resubmission of the same
+     * {@code runnerRequestId} is what safely resolves the ambiguity, via the same {@code claim()}
+     * call observing whichever outcome the database actually settled on. */
+    RUNNER_LEDGER_CLAIM_AMBIGUOUS,
     /** {@link RunnerIdentityProvider#currentIdentity()} returned no identity at all (host
      * attestation source missing, unreadable, or malformed) - distinct from
      * {@link #RUNNER_IDENTITY_UNTRUSTED}, which means an identity WAS resolved but is marked
