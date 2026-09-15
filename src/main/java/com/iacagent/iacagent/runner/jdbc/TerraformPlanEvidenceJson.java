@@ -1,5 +1,6 @@
 package com.iacagent.iacagent.runner.jdbc;
 
+import com.iacagent.iacagent.identity.WorkloadIdentityEvidence;
 import com.iacagent.iacagent.runner.RunnerReasonCode;
 import com.iacagent.iacagent.runner.TerraformPlanEvidence;
 import com.iacagent.iacagent.runner.TerraformProcessState;
@@ -14,7 +15,9 @@ import java.util.stream.Collectors;
 /** Manual JSON (de)serialization for {@link TerraformPlanEvidence} - same discipline as
  * {@link TerraformProcessEvidenceJson}/{@link TerraformInitEvidenceJson}: a fixed, small, fully
  * known field set, hand-written rather than relying on Jackson POJO/record data binding. Never
- * carries credential material - {@link TerraformPlanEvidence} itself has no field for it. */
+ * carries credential material - {@link TerraformPlanEvidence} itself has no field for it; its
+ * embedded {@link WorkloadIdentityEvidence} (Phase 2B-7) is, by its own construction, equally
+ * incapable of carrying one (see that record's javadoc). */
 final class TerraformPlanEvidenceJson {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -57,9 +60,67 @@ final class TerraformPlanEvidenceJson {
         field(json, "processState", evidence.processState().name());
         rawField(json, "reasonCodes", "[" + evidence.reasonCodes().stream().map(rc -> quote(rc.name())).collect(Collectors.joining(",")) + "]");
         field(json, "startedAt", evidence.startedAt() == null ? null : evidence.startedAt().toString());
-        field(json, "completedAt", evidence.completedAt() == null ? null : evidence.completedAt().toString(), false);
+        field(json, "completedAt", evidence.completedAt() == null ? null : evidence.completedAt().toString());
+        rawField(json, "workloadIdentityEvidence", workloadIdentityEvidenceToJson(evidence.workloadIdentityEvidence()), false);
         json.append("}");
         return json.toString();
+    }
+
+    private static String workloadIdentityEvidenceToJson(WorkloadIdentityEvidence e) {
+        if (e == null) {
+            return "null";
+        }
+        StringBuilder json = new StringBuilder("{");
+        field(json, "issuer", e.issuer());
+        field(json, "subjectSha256", e.subjectSha256());
+        field(json, "audience", e.audience());
+        field(json, "repository", e.repository());
+        field(json, "repositoryOwner", e.repositoryOwner());
+        field(json, "workflowRef", e.workflowRef());
+        field(json, "ref", e.ref());
+        field(json, "environment", e.environment());
+        field(json, "commitSha", e.commitSha());
+        field(json, "issuedAt", e.issuedAt() == null ? null : e.issuedAt().toString());
+        field(json, "expiresAt", e.expiresAt() == null ? null : e.expiresAt().toString());
+        field(json, "verifiedAt", e.verifiedAt().toString());
+        field(json, "verifierType", e.verifierType());
+        field(json, "verifierVersion", e.verifierVersion());
+        rawField(json, "authorized", String.valueOf(e.authorized()));
+        field(json, "credentialProviderType", e.credentialProviderType());
+        field(json, "cloudRoleIdentifier", e.cloudRoleIdentifier());
+        field(json, "credentialExpiresAt", e.credentialExpiresAt() == null ? null : e.credentialExpiresAt().toString(), false);
+        json.append("}");
+        return json.toString();
+    }
+
+    private static WorkloadIdentityEvidence workloadIdentityEvidenceFromJson(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        return new WorkloadIdentityEvidence(
+                textOrNull(node, "issuer"),
+                textOrNull(node, "subjectSha256"),
+                textOrNull(node, "audience"),
+                textOrNull(node, "repository"),
+                textOrNull(node, "repositoryOwner"),
+                textOrNull(node, "workflowRef"),
+                textOrNull(node, "ref"),
+                textOrNull(node, "environment"),
+                textOrNull(node, "commitSha"),
+                instantOrNull(node, "issuedAt"),
+                instantOrNull(node, "expiresAt"),
+                Instant.parse(node.path("verifiedAt").asText()),
+                node.path("verifierType").asText(),
+                node.path("verifierVersion").asText(),
+                node.path("authorized").asBoolean(false),
+                textOrNull(node, "credentialProviderType"),
+                textOrNull(node, "cloudRoleIdentifier"),
+                instantOrNull(node, "credentialExpiresAt"));
+    }
+
+    private static Instant instantOrNull(JsonNode root, String field) {
+        JsonNode node = root.path(field);
+        return node.isMissingNode() || node.isNull() ? null : Instant.parse(node.asText());
     }
 
     static TerraformPlanEvidence fromJson(String json) {
@@ -98,7 +159,8 @@ final class TerraformPlanEvidenceJson {
                 TerraformProcessState.valueOf(root.path("processState").asText()),
                 reasonCodeList(root.path("reasonCodes")),
                 Instant.parse(root.path("startedAt").asText()),
-                Instant.parse(root.path("completedAt").asText()));
+                Instant.parse(root.path("completedAt").asText()))
+                .withWorkloadIdentityEvidence(workloadIdentityEvidenceFromJson(root.path("workloadIdentityEvidence")));
     }
 
     private static List<RunnerReasonCode> reasonCodeList(JsonNode arrayNode) {
@@ -131,7 +193,14 @@ final class TerraformPlanEvidenceJson {
     }
 
     private static void rawField(StringBuilder json, String name, String rawValue) {
-        json.append(quote(name)).append(':').append(rawValue).append(',');
+        rawField(json, name, rawValue, true);
+    }
+
+    private static void rawField(StringBuilder json, String name, String rawValue, boolean trailingComma) {
+        json.append(quote(name)).append(':').append(rawValue);
+        if (trailingComma) {
+            json.append(',');
+        }
     }
 
     private static String quote(String value) {

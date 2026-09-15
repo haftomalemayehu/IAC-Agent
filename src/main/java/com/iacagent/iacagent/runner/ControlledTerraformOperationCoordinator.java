@@ -744,14 +744,22 @@ final class ControlledTerraformOperationCoordinator {
         TerraformCredentialMaterial credentials;
         try {
             credentials = credentialProvider.obtain(request, backend.stateIdentity());
+        } catch (com.iacagent.iacagent.identity.WorkloadIdentityFederationException e) {
+            // Phase 2B-7: a precise verify/authorize/federate failure reason, plus whatever
+            // sanitized evidence was captured before the failure - never the raw token or any
+            // credential value, which this exception structurally cannot carry.
+            return blockedPlan(request, runnerId, e.reasonCode(), configSha256, stateIdentitySha256, null, backend, null, null, startedAt)
+                    .withWorkloadIdentityEvidence(e.evidence());
         } catch (RuntimeException e) {
             return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_STATE_BACKEND_UNAVAILABLE, configSha256, stateIdentitySha256, null, backend, null, null, startedAt);
         }
+        com.iacagent.iacagent.identity.WorkloadIdentityEvidence workloadIdentityEvidence = credentials.workloadIdentityEvidence();
 
         AttestationOutcome attestation = obtainVerifiedExecutable(request, workspace);
         if (!attestation.isVerified()) {
             return blockedPlan(request, runnerId, attestation.failureReason(), configSha256, stateIdentitySha256,
-                    attestation.observedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt);
+                    attestation.observedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt)
+                    .withWorkloadIdentityEvidence(workloadIdentityEvidence);
         }
 
         try {
@@ -759,7 +767,8 @@ final class ControlledTerraformOperationCoordinator {
             workspaceManager.prepareTerraformCliConfig(workspace);
         } catch (RuntimeException e) {
             return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_STATE_BACKEND_UNAVAILABLE, configSha256, stateIdentitySha256,
-                    attestation.descriptor().expectedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt);
+                    attestation.descriptor().expectedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt)
+                    .withWorkloadIdentityEvidence(workloadIdentityEvidence);
         }
 
         ControlledTerraformCommand initCommand = commandFactory.initForPlanCommand(
@@ -768,7 +777,8 @@ final class ControlledTerraformOperationCoordinator {
         RunnerReasonCode initFailureReason = classifyNonPlanFailure(initResult, RunnerReasonCode.TERRAFORM_PLAN_INIT_FAILED);
         if (initFailureReason != null) {
             return blockedPlan(request, runnerId, initFailureReason, configSha256, stateIdentitySha256,
-                    attestation.observedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt);
+                    attestation.observedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt)
+                    .withWorkloadIdentityEvidence(workloadIdentityEvidence);
         }
 
         String planInputSha256 = TerraformPlanInputIdentity.computeSha256(
@@ -781,7 +791,8 @@ final class ControlledTerraformOperationCoordinator {
             planPath = workspaceManager.preparePlanArtifactPath(workspace);
         } catch (RuntimeException e) {
             return blockedPlan(request, runnerId, RunnerReasonCode.TERRAFORM_PLAN_ARTIFACT_INVALID, configSha256, stateIdentitySha256,
-                    attestation.observedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt);
+                    attestation.observedVersion(), backend, credentials.sourceIdentifier(), attestation.observedSha256(), startedAt)
+                    .withWorkloadIdentityEvidence(workloadIdentityEvidence);
         }
 
         ControlledTerraformCommand planCommand = commandFactory.planCommand(
@@ -789,7 +800,8 @@ final class ControlledTerraformOperationCoordinator {
         TerraformProcessResult planResult = process.execute(planCommand);
 
         return interpretPlan(request, runnerId, workspace, configSha256, stateIdentitySha256, planInputSha256, attestation.descriptor(),
-                attestation.observedSha256(), attestation.observedVersion(), backend, credentials.sourceIdentifier(), planPath, planResult, startedAt);
+                attestation.observedSha256(), attestation.observedVersion(), backend, credentials.sourceIdentifier(), planPath, planResult, startedAt)
+                .withWorkloadIdentityEvidence(workloadIdentityEvidence);
     }
 
     /** {@code null} if the process succeeded (exit 0); otherwise the reason code for its failure -

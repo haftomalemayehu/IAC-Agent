@@ -271,5 +271,65 @@ public enum RunnerReasonCode {
      * {@code init}/{@code plan} is ever launched. A future trusted cross-state dependency model may
      * permit specific, resolver-mediated cases; this phase does not attempt to allowlist any
      * repository-authored remote-state coordinates. */
-    TERRAFORM_REMOTE_STATE_DATA_SOURCE_NOT_ALLOWED
+    TERRAFORM_REMOTE_STATE_DATA_SOURCE_NOT_ALLOWED,
+
+    // ---- Phase 2B-7: verified workload identity + credential federation (Gate C) ----
+
+    /** No workload identity token was available to verify at all (e.g. the ambient token source
+     * could not obtain one) - distinct from a token that was obtained but failed verification. */
+    WORKLOAD_IDENTITY_MISSING,
+    /** The token's cryptographic signature did not verify against any key the trusted JWKS source
+     * currently holds for its {@code kid}. Never distinguishes "wrong key" from "corrupted token" -
+     * both are the same untrusted-signature outcome. */
+    WORKLOAD_IDENTITY_INVALID_SIGNATURE,
+    /** The token declared a signing algorithm outside this verifier's fixed allowlist (e.g.
+     * {@code alg=none}, or an algorithm this verifier was never configured to trust) - rejected
+     * before any signature verification is even attempted. */
+    WORKLOAD_IDENTITY_UNSUPPORTED_ALGORITHM,
+    /** The token's {@code iss} claim does not match the trusted, control-plane-configured issuer -
+     * never a caller-selected value. */
+    WORKLOAD_IDENTITY_UNTRUSTED_ISSUER,
+    /** The token's {@code aud} claim does not contain the trusted, control-plane-configured expected
+     * audience - never a caller-selected value. */
+    WORKLOAD_IDENTITY_AUDIENCE_MISMATCH,
+    /** The token's {@code exp} claim is in the past (with configured clock-skew tolerance applied). */
+    WORKLOAD_IDENTITY_EXPIRED,
+    /** The token's {@code nbf} claim (if present) is in the future (with configured clock-skew
+     * tolerance applied). */
+    WORKLOAD_IDENTITY_NOT_YET_VALID,
+    /** A claim this verifier requires to construct a {@link com.iacagent.iacagent.identity.VerifiedWorkloadIdentity}
+     * (e.g. {@code repository}, {@code sub}, {@code sha}) was absent from an otherwise
+     * signature-valid token. */
+    WORKLOAD_IDENTITY_REQUIRED_CLAIM_MISSING,
+    /** The verified identity's {@code repository} claim does not match the repository the execution
+     * request itself declares. */
+    WORKLOAD_IDENTITY_REPOSITORY_MISMATCH,
+    /** The verified identity's {@code repository_owner} claim does not match the expected/trusted
+     * repository owner. */
+    WORKLOAD_IDENTITY_OWNER_MISMATCH,
+    /** The verified identity's {@code sha} claim does not match the commit the execution request
+     * itself declares. */
+    WORKLOAD_IDENTITY_COMMIT_MISMATCH,
+    /** The verified identity's environment claim (or its absence) does not match/authorize the
+     * environment the execution request itself declares. */
+    WORKLOAD_IDENTITY_ENVIRONMENT_MISMATCH,
+    /** The verified identity's workflow reference is not one the trusted authorization policy
+     * permits for this repository/environment - a token merely originating from the trusted issuer
+     * is never, by itself, sufficient. */
+    WORKLOAD_IDENTITY_WORKFLOW_NOT_AUTHORIZED,
+    /** The workload identity verifier itself could not be reached/operated (e.g. the trusted JWKS
+     * endpoint is unavailable and no cached key satisfies the token's {@code kid}) - a genuine
+     * infrastructure failure, always fails closed, never falls back to an unverified identity. */
+    WORKLOAD_IDENTITY_VERIFIER_UNAVAILABLE,
+    /** {@link com.iacagent.iacagent.identity.aws.TrustedCloudRoleResolver} found no cloud role this
+     * verified, authorized workload identity is permitted to assume for the requested repository/
+     * environment - the request can never select an arbitrary role itself. */
+    CLOUD_ROLE_NOT_AUTHORIZED,
+    /** The trusted credential federation call itself (e.g. AWS STS {@code AssumeRoleWithWebIdentity})
+     * failed or was unreachable - fails closed, never falls back to ambient/static credentials. */
+    CREDENTIAL_FEDERATION_FAILED,
+    /** Federated credentials were obtained but their remaining lifetime does not meet this
+     * operation's configured minimum bound - rejected before use rather than risked expiring
+     * mid-operation. */
+    CREDENTIAL_LIFETIME_INSUFFICIENT
 }

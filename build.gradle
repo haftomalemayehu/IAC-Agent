@@ -25,11 +25,19 @@ sourceSets {
         compileClasspath += sourceSets.main.output + sourceSets.test.output
         runtimeClasspath += sourceSets.main.output + sourceSets.test.output
     }
+    identityAcceptanceTest {
+        java.srcDir 'src/identityAcceptanceTest/java'
+        resources.srcDir 'src/identityAcceptanceTest/resources'
+        compileClasspath += sourceSets.main.output + sourceSets.test.output
+        runtimeClasspath += sourceSets.main.output + sourceSets.test.output
+    }
 }
 
 configurations {
     postgresTestImplementation.extendsFrom testImplementation
     postgresTestRuntimeOnly.extendsFrom testRuntimeOnly
+    identityAcceptanceTestImplementation.extendsFrom testImplementation
+    identityAcceptanceTestRuntimeOnly.extendsFrom testRuntimeOnly
 }
 
 ext {
@@ -66,6 +74,16 @@ dependencies {
     // Never used by the H2 reference ledger; only PostgresRunnerLedgerRepository depends on these.
     implementation 'org.postgresql:postgresql'
     implementation 'com.zaxxer:HikariCP'
+    // Phase 2B-7: verified workload identity (Gate C) - mature, pinned JWT/JWKS libraries rather
+    // than hand-rolled signature verification. java-jwt enforces the caller pick a concrete
+    // algorithm (there is no "none" Algorithm to construct), and jwks-rsa's caching provider gives
+    // bounded-timeout, cached, kid-keyed key lookup with a real network fetch on an unknown kid.
+    implementation 'com.auth0:java-jwt:4.5.0'
+    implementation 'com.auth0:jwks-rsa:0.22.2'
+    // Phase 2B-7: AWS STS federation reference implementation (AssumeRoleWithWebIdentity only -
+    // never any other AWS service, never the SDK's default/ambient credential provider chain).
+    implementation platform('software.amazon.awssdk:bom:2.46.7')
+    implementation 'software.amazon.awssdk:sts'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 
@@ -91,4 +109,13 @@ tasks.register('postgresTest', Test) {
     // Forward -Dpgtest.* from the Gradle invocation into the forked test JVM - Gradle does not do
     // this automatically for Test tasks.
     systemProperties(System.getProperties().findAll { k, v -> k.toString().startsWith('pgtest.') })
+}
+
+tasks.register('identityAcceptanceTest', Test) {
+    description = 'Phase 2B-7 Gate C real-issuer acceptance: mints and verifies a REAL GitHub Actions OIDC token against the real GitHub JWKS endpoint. Only meaningful inside an actual GitHub Actions job (auto-skips elsewhere via @EnabledIfEnvironmentVariable) - not part of `check`/`test`.'
+    group = 'verification'
+    testClassesDirs = sourceSets.identityAcceptanceTest.output.classesDirs
+    classpath = sourceSets.identityAcceptanceTest.runtimeClasspath
+    useJUnitPlatform()
+    shouldRunAfter test
 }

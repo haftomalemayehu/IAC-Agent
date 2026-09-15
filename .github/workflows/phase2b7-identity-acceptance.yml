@@ -1,0 +1,35 @@
+name: phase2b7-identity-acceptance
+
+# Phase 2B-7 Gate C real-issuer acceptance evidence: mints a real GitHub Actions OIDC token (via
+# `id-token: write`) and verifies it against the real https://token.actions.githubusercontent.com
+# issuer/JWKS - see src/identityAcceptanceTest and docs/phase-2b7-workload-identity-federation.md.
+#
+# workflow_dispatch requires a workflow file to already exist on the repository's default branch
+# before it is API-dispatchable, which conflicts with this phase's "do not push to main before
+# review" discipline. Triggering on `push` to the disposable acceptance-check ref instead avoids
+# that entirely - GitHub picks up a new workflow file the moment it is pushed, on any branch, no
+# pre-existing default-branch registration required. This is a deliberate, single-purpose
+# acceptance check confined to one disposable ref, not something intended to run on every push to
+# a real branch.
+on:
+  push:
+    branches:
+      - phase2b7-identity-acceptance-check
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  identity-acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Real GitHub Actions OIDC verification acceptance
+        run: ./gradlew identityAcceptanceTest --info
