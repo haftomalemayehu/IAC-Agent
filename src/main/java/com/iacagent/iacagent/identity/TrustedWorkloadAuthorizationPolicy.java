@@ -42,19 +42,27 @@ public final class TrustedWorkloadAuthorizationPolicy implements WorkloadAuthori
             return WorkloadAuthorizationResult.denied(RunnerReasonCode.WORKLOAD_IDENTITY_ENVIRONMENT_MISMATCH);
         }
 
-        AllowedWorkload rule = allowedWorkloads.stream()
+        Set<AllowedWorkload> candidates = allowedWorkloads.stream()
                 .filter(w -> w.repository().equals(repository) && w.environment().equals(environment))
-                .findFirst()
-                .orElse(null);
-        if (rule == null) {
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        if (candidates.isEmpty()) {
             return WorkloadAuthorizationResult.denied(RunnerReasonCode.WORKLOAD_IDENTITY_WORKFLOW_NOT_AUTHORIZED);
         }
-        if (!rule.repositoryOwner().equals(identity.repositoryOwner())) {
+        // Existence checks below are order-independent by construction, unlike picking a single
+        // "the" rule via findFirst() over a Set (whose iteration order is unspecified) - with more
+        // than one rule configured for the same (repository, environment), a single arbitrarily
+        // picked rule could wrongly deny a workload that a DIFFERENT configured rule does authorize.
+        boolean exactMatch = candidates.stream()
+                .anyMatch(w -> w.repositoryOwner().equals(identity.repositoryOwner())
+                        && w.workflowRef().equals(identity.workflowRef()));
+        if (exactMatch) {
+            return WorkloadAuthorizationResult.granted();
+        }
+        boolean ownerMatchesAnyCandidate = candidates.stream()
+                .anyMatch(w -> w.repositoryOwner().equals(identity.repositoryOwner()));
+        if (!ownerMatchesAnyCandidate) {
             return WorkloadAuthorizationResult.denied(RunnerReasonCode.WORKLOAD_IDENTITY_OWNER_MISMATCH);
         }
-        if (!rule.workflowRef().equals(identity.workflowRef())) {
-            return WorkloadAuthorizationResult.denied(RunnerReasonCode.WORKLOAD_IDENTITY_WORKFLOW_NOT_AUTHORIZED);
-        }
-        return WorkloadAuthorizationResult.granted();
+        return WorkloadAuthorizationResult.denied(RunnerReasonCode.WORKLOAD_IDENTITY_WORKFLOW_NOT_AUTHORIZED);
     }
 }

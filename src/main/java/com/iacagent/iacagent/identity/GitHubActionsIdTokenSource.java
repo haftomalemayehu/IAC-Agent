@@ -63,13 +63,14 @@ public final class GitHubActionsIdTokenSource implements WorkloadIdentityTokenSo
                     "GitHub Actions OIDC environment is not present (missing " + REQUEST_URL_ENV + "/" + REQUEST_TOKEN_ENV
                             + ") - this job likely lacks 'id-token: write' permission, or is not running inside GitHub Actions at all");
         }
+        HttpURLConnection connection = null;
         try {
             URI uri = URI.create(requestUrl + (requestUrl.contains("?") ? "&" : "?") + "audience=" + java.net.URLEncoder.encode(audience, StandardCharsets.UTF_8));
             if (!"https".equalsIgnoreCase(uri.getScheme())) {
                 throw new WorkloadIdentityTokenUnavailableException("ACTIONS_ID_TOKEN_REQUEST_URL is not HTTPS");
             }
             URL url = uri.toURL();
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("GET");
             connection.setInstanceFollowRedirects(false);
             connection.setConnectTimeout((int) connectTimeout.toMillis());
@@ -80,15 +81,27 @@ public final class GitHubActionsIdTokenSource implements WorkloadIdentityTokenSo
             if (status != 200) {
                 throw new WorkloadIdentityTokenUnavailableException("GitHub Actions OIDC token endpoint returned HTTP " + status);
             }
-            byte[] body = readBounded(connection.getInputStream(), MAX_RESPONSE_BYTES);
+            byte[] body;
+            try (InputStream in = connection.getInputStream()) {
+                body = readBounded(in, MAX_RESPONSE_BYTES);
+            }
             JsonNode root = MAPPER.readTree(body);
             JsonNode value = root.path("value");
             if (!value.isTextual() || value.asString().isBlank()) {
                 throw new WorkloadIdentityTokenUnavailableException("GitHub Actions OIDC token endpoint response had no usable 'value' field");
             }
             return value.asString();
-        } catch (IOException e) {
+        } catch (WorkloadIdentityTokenUnavailableException e) {
+            throw e;
+        } catch (IOException | IllegalArgumentException e) {
+            // IllegalArgumentException covers a malformed ACTIONS_ID_TOKEN_REQUEST_URL from
+            // URI.create()/URLEncoder - must not escape as a raw RuntimeException, or callers lose
+            // the precise WORKLOAD_IDENTITY_* reason-code classification this class exists to give.
             throw new WorkloadIdentityTokenUnavailableException("failed to obtain a GitHub Actions OIDC token", e);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
     }
 

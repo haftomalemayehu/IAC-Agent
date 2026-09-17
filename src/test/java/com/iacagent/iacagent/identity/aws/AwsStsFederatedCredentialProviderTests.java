@@ -127,6 +127,25 @@ class AwsStsFederatedCredentialProviderTests {
     }
 
     @Test
+    void nullCredentialFieldInStsResponseThrowsCredentialFederationFailedNotNpe() {
+        TrustedCloudRoleResolver resolver = mock(TrustedCloudRoleResolver.class);
+        when(resolver.resolve(any(), any(), any(), any())).thenReturn(CloudRoleResolution.resolved(ROLE_ARN));
+        StsClient stsClient = mock(StsClient.class);
+        // A Credentials object with a null field is an SDK edge case (partial/mocked response) -
+        // must fail closed with a precise reason code, never an uncaught NullPointerException.
+        Credentials incomplete = Credentials.builder()
+                .accessKeyId("AKIAFAKE").secretAccessKey(null).sessionToken("fake-session-token")
+                .expiration(Instant.now().plusSeconds(3600)).build();
+        when(stsClient.assumeRoleWithWebIdentity(any(AssumeRoleWithWebIdentityRequest.class)))
+                .thenReturn(AssumeRoleWithWebIdentityResponse.builder().credentials(incomplete).build());
+
+        var provider = new AwsStsFederatedCredentialProvider(resolver, stsClient, Duration.ofMinutes(15), Duration.ofMinutes(5));
+        var e = assertThrows(WorkloadIdentityFederationException.class,
+                () -> provider.federate("raw-token", fakeIdentity(), REPOSITORY, ENVIRONMENT, TerraformCredentialProfile.PLAN));
+        assertEquals(RunnerReasonCode.CREDENTIAL_FEDERATION_FAILED, e.reasonCode());
+    }
+
+    @Test
     void constructorRejectsCallerSuppliedRoleArnStyleMisuse() {
         // Defensive/documentation test: TrustedCloudRoleResolver is the ONLY way a role ARN reaches
         // this class - there is no overload or setter accepting one directly.

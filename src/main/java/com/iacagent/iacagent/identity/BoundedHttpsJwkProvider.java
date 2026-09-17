@@ -65,13 +65,14 @@ final class BoundedHttpsJwkProvider implements JwkProvider {
     }
 
     private Map<String, Object> fetchDocument() throws JwkException {
+        HttpURLConnection connection = null;
         try {
             URI uri = URI.create(config.jwksUri());
             if (!"https".equalsIgnoreCase(uri.getScheme())) {
                 throw new SigningKeyNotFoundException("jwksUri is not HTTPS: " + config.jwksUri(), null);
             }
             URL url = uri.toURL();
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("GET");
             connection.setInstanceFollowRedirects(false); // never follow a redirect to an untrusted host/scheme
             connection.setConnectTimeout((int) config.jwksConnectTimeout().toMillis());
@@ -81,12 +82,19 @@ final class BoundedHttpsJwkProvider implements JwkProvider {
             if (status != 200) {
                 throw new SigningKeyNotFoundException("JWKS endpoint returned HTTP " + status + " for " + config.jwksUri(), null);
             }
-            byte[] body = readBounded(connection.getInputStream(), config.jwksMaxResponseBytes());
+            byte[] body;
+            try (InputStream in = connection.getInputStream()) {
+                body = readBounded(in, config.jwksMaxResponseBytes());
+            }
             @SuppressWarnings("unchecked")
             Map<String, Object> parsed = MAPPER.readValue(body, Map.class);
             return parsed;
         } catch (IOException | RuntimeException e) {
             throw new SigningKeyNotFoundException("failed to fetch JWKS from " + config.jwksUri(), e);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
     }
 

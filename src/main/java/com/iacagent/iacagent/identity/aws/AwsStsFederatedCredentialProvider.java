@@ -125,6 +125,13 @@ public final class AwsStsFederatedCredentialProvider implements FederatedCredent
                     "federated AWS credentials do not meet the configured minimum remaining lifetime");
         }
 
+        if (credentials.accessKeyId() == null || credentials.secretAccessKey() == null || credentials.sessionToken() == null) {
+            // Map.of(...) throws NPE on a null value - fail closed with a precise reason code
+            // instead, since this is an SDK response-shape edge case, not a call-site bug.
+            throw new WorkloadIdentityFederationException(
+                    RunnerReasonCode.CREDENTIAL_FEDERATION_FAILED,
+                    "AWS STS AssumeRoleWithWebIdentity response was missing one or more credential fields");
+        }
         Map<String, String> environmentVariables = Map.of(
                 "AWS_ACCESS_KEY_ID", credentials.accessKeyId(),
                 "AWS_SECRET_ACCESS_KEY", credentials.secretAccessKey(),

@@ -108,4 +108,22 @@ class Phase2b5JdbcTests {
         assertEquals(planEvidence.planSha256(), roundTripped.planSha256());
         assertEquals(planEvidence.credentialSourceIdentifier(), roundTripped.credentialSourceIdentifier());
     }
+
+    @Test
+    void workloadIdentityEvidenceWithNullVerifierVersionRoundTripsAsNullNotEmptyString() {
+        RunnerRequest request = sampleRequest("req-plan-workload-identity-null-verifier-version");
+        // verifierVersion is legitimately nullable at the record level - only verifiedAt/verifierType
+        // are required. Reading it back as "" instead of null would be a silent data mutation.
+        com.iacagent.iacagent.identity.WorkloadIdentityEvidence identityEvidence =
+                com.iacagent.iacagent.identity.WorkloadIdentityEvidence.deniedBeforeVerification(
+                        NOW, "github-actions-oidc", null);
+        TerraformPlanEvidence planEvidence = samplePlanEvidence(request).withWorkloadIdentityEvidence(identityEvidence);
+
+        String json = TerraformPlanEvidenceJson.toJson(planEvidence);
+        TerraformPlanEvidence roundTripped = TerraformPlanEvidenceJson.fromJson(json);
+
+        assertNotNull(roundTripped.workloadIdentityEvidence());
+        assertNull(roundTripped.workloadIdentityEvidence().verifierVersion());
+        assertEquals("github-actions-oidc", roundTripped.workloadIdentityEvidence().verifierType());
+    }
 }

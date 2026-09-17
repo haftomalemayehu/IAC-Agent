@@ -347,6 +347,41 @@ class Phase2b7Tests {
         assertEquals(RunnerReasonCode.WORKLOAD_IDENTITY_WORKFLOW_NOT_AUTHORIZED, result.failureReason());
     }
 
+    @Test
+    void secondMatchingRuleForSameRepositoryEnvironmentIsAuthorizedRegardlessOfSetIterationOrder() {
+        String otherWorkflowRef = "owner/repo/.github/workflows/hotfix.yml@refs/heads/main";
+        var policy = new TrustedWorkloadAuthorizationPolicy(Set.of(
+                new AllowedWorkload(REPOSITORY, REPOSITORY_OWNER, "nonprod", otherWorkflowRef),
+                new AllowedWorkload(REPOSITORY, REPOSITORY_OWNER, "nonprod", WORKFLOW_REF)));
+        // Identity's workflowRef only matches the SECOND rule - must not depend on which rule a
+        // Set happens to iterate first.
+        var identity = identityFor(REPOSITORY, REPOSITORY_OWNER, COMMIT_SHA, WORKFLOW_REF, null);
+        var result = policy.authorize(identity, REPOSITORY, COMMIT_SHA, "nonprod");
+        assertTrue(result.authorized());
+    }
+
+    @Test
+    void workflowMismatchAgainstAllRulesForRepositoryEnvironmentIsDeniedAsWorkflowNotAuthorized() {
+        String otherWorkflowRef = "owner/repo/.github/workflows/hotfix.yml@refs/heads/main";
+        var policy = new TrustedWorkloadAuthorizationPolicy(Set.of(
+                new AllowedWorkload(REPOSITORY, REPOSITORY_OWNER, "nonprod", otherWorkflowRef),
+                new AllowedWorkload(REPOSITORY, REPOSITORY_OWNER, "nonprod", WORKFLOW_REF)));
+        var identity = identityFor(REPOSITORY, REPOSITORY_OWNER, COMMIT_SHA,
+                "owner/repo/.github/workflows/unrelated.yml@refs/heads/main", null);
+        var result = policy.authorize(identity, REPOSITORY, COMMIT_SHA, "nonprod");
+        assertEquals(RunnerReasonCode.WORKLOAD_IDENTITY_WORKFLOW_NOT_AUTHORIZED, result.failureReason());
+    }
+
+    @Test
+    void ownerMismatchAgainstAllRulesForRepositoryEnvironmentIsDeniedAsOwnerMismatch() {
+        var policy = new TrustedWorkloadAuthorizationPolicy(Set.of(
+                new AllowedWorkload(REPOSITORY, REPOSITORY_OWNER, "nonprod", WORKFLOW_REF),
+                new AllowedWorkload(REPOSITORY, REPOSITORY_OWNER, "nonprod", "owner/repo/.github/workflows/hotfix.yml@refs/heads/main")));
+        var identity = identityFor(REPOSITORY, "attacker-owner", COMMIT_SHA, WORKFLOW_REF, null);
+        var result = policy.authorize(identity, REPOSITORY, COMMIT_SHA, "nonprod");
+        assertEquals(RunnerReasonCode.WORKLOAD_IDENTITY_OWNER_MISMATCH, result.failureReason());
+    }
+
     // ===================== FederatedTerraformCredentialProvider (hand-written fakes) =====================
 
     private static RunnerRequest planRequest() {
